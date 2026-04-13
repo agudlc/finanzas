@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agudlc
+      POSTGRES_PASSWORD: finagudlc
+      POSTGRES_DB: finagudlc
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://agudlc:finagudlc@db:5432/finagudlc
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:

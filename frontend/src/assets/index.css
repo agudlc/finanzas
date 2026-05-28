@@ -1,0 +1,240 @@
+/* ============================================================
+   Finanzas — Design tokens + shadcn alias layer
+   Tailwind v4. The finanzas tokens are the source of truth;
+   shadcn's abstract tokens (background, foreground, primary, …)
+   are aliased to them so shadcn components consume the design
+   system without per-component changes.
+   ============================================================ */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@import "@fontsource-variable/geist";
+@import "@fontsource/instrument-serif";
+@import "@fontsource/instrument-serif/400-italic.css";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   Design tokens (source of truth)
+   ============================================================ */
+@theme {
+    /* ---- Colors -------------------------------------------- */
+    /* Paper neutrals — warm cream, not pure white.
+       Ladder: paper → paper-2 → paper-3 (light → dark) for
+       backgrounds, elevation, bar tracks. */
+    --color-paper:        #f3efe6;
+    --color-paper-2:      #ece7da;
+    --color-paper-3:      #e3ddcc;
+
+    /* Ink neutrals — warm near-black to fog.
+       ink (primary) → ink-2 (body) → ink-mute (secondary) → ink-faint (tertiary). */
+    --color-ink:          #1a1814;
+    --color-ink-2:        #3a3530;
+    --color-ink-mute:     #7a736a;
+    --color-ink-faint:    #a8a094;
+
+    /* Hairlines */
+    --color-rule:         #d8d1c0;
+    --color-rule-soft:    #e5dfd0;
+
+    /* Semantic — apply by meaning, not aesthetics */
+    --color-link:         #1f3d6b;   /* deep blue · meta progress, links */
+    --color-link-soft:    #d3dbe7;
+    --color-income:       #355e3b;   /* forest green · ingresos, on-pace */
+    --color-income-soft:  #cfdcc8;
+    --color-expense:      #6b2418;   /* oxide · egresos */
+    --color-expense-soft: #e8d2c8;
+    --color-shame:        #c43d2a;   /* alert red · presupuesto excedido */
+    --color-warn:         #b6791f;   /* amber · zona naranja */
+
+    /* Category palette — fixed hue per category, never reassign. */
+    --color-cat-housing:    #1f3d6b;
+    --color-cat-food:      #a36a2a;
+    --color-cat-transport:  #355e3b;
+    --color-cat-services:   #5a6b78;
+    --color-cat-health:       #9c3a4b;
+    --color-cat-hobbies:        #704a8a;
+    --color-cat-education:   #2a6b6b;
+    --color-cat-others:       #8a8170;
+
+    /* ---- Typography ---------------------------------------- */
+    /* serif → emotion, hero numbers, goal names. Italic for emphasis.
+       sans  → all UI: nav, body, labels, buttons.
+       mono  → every cifra in lists/bars (with tnum on via .num). */
+    --font-serif: "Instrument Serif", "Times New Roman", serif;
+    --font-sans:  "Geist Variable", "Geist", ui-sans-serif, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --font-mono:  "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+    /* Type scale — kept tight on purpose. */
+    --text-hero:    96px;     /* balance del mes */
+    --text-display: 64px;     /* page titles */
+    --text-h1:      32px;     /* mood, donut totals, goal names */
+    --text-body:    14px;     /* default UI */
+    --text-sm:      13px;     /* secondary UI */
+    --text-xs:      12px;     /* meta */
+    --text-tag:     11px;     /* uppercased tags / labels */
+    --text-micro:   10px;     /* footnotes, axis ticks */
+
+    --leading-display: 0.95;
+    --leading-tight:   1.1;
+    --leading-base:    1.45;
+
+    --tracking-display: -0.02em;
+    --tracking-base:    -0.005em;
+    --tracking-tag:      0.12em;
+    --tracking-tag-wide: 0.16em;
+
+    /* ---- Radii --------------------------------------------- */
+    --radius-xs:   4px;     /* category color chips, swatches */
+    --radius-sm:   8px;     /* buttons, inputs */
+    --radius-md:   12px;    /* notes blocks */
+    --radius-lg:   14px;    /* insight rows, info containers */
+    --radius-xl:   16px;    /* chat bubbles, charts wrappers */
+    --radius-2xl:  24px;    /* bottom sheet top corners */
+    --radius-pill: 999px;   /* pills, tags, dots, FABs */
+
+    /* ---- Shadows ------------------------------------------- */
+    /* Sparingly. Only floating nav + FAB + bottom sheet. */
+    --shadow-pill:  0 12px 40px -12px rgba(26, 24, 20, 0.18),
+                    0 1px 0 rgba(255, 255, 255, 0.5) inset;
+    --shadow-fab:   0 12px 40px -10px rgba(26, 24, 20, 0.45);
+    --shadow-sheet: 0 -20px 60px -10px rgba(26, 24, 20, 0.25);
+}
+
+/* ============================================================
+   shadcn alias layer — abstract tokens → finanzas tokens.
+   Lets `bg-background`, `text-foreground`, `bg-primary`, etc.
+   keep working in shadcn components without touching their code.
+   ============================================================ */
+@theme inline {
+    --color-background:           var(--color-paper);
+    --color-foreground:           var(--color-ink);
+    --color-card:                 var(--color-paper);
+    --color-card-foreground:      var(--color-ink);
+    --color-popover:              var(--color-paper);
+    --color-popover-foreground:   var(--color-ink);
+    --color-primary:              var(--color-ink);
+    --color-primary-foreground:   var(--color-paper);
+    --color-secondary:            var(--color-paper-2);
+    --color-secondary-foreground: var(--color-ink);
+    --color-muted:                var(--color-paper-2);
+    --color-muted-foreground:     var(--color-ink-mute);
+    --color-accent:               var(--color-paper-2);
+    --color-accent-foreground:    var(--color-ink);
+    --color-destructive:          var(--color-shame);
+    --color-border:               var(--color-rule);
+    --color-input:                var(--color-rule);
+    --color-ring:                 var(--color-ink-mute);
+}
+
+/* ============================================================
+   Plain CSS custom properties — aliases for non-Tailwind
+   consumers (inline styles, styled-components, vanilla CSS).
+   ============================================================ */
+:root {
+    --paper: #f3efe6;
+    --paper-2: #ece7da;
+    --paper-3: #e3ddcc;
+    --ink: #1a1814;
+    --ink-2: #3a3530;
+    --ink-mute: #7a736a;
+    --ink-faint: #a8a094;
+    --rule: #d8d1c0;
+    --rule-soft: #e5dfd0;
+    --link: #1f3d6b;
+    --income: #355e3b;
+    --expense: #6b2418;
+    --shame: #c43d2a;
+    --warn: #b6791f;
+
+    --serif: "Instrument Serif", "Times New Roman", serif;
+    --sans:  "Geist Variable", "Geist", ui-sans-serif, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono:  "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+/* ============================================================
+   Reusable utility classes that aren't trivial in Tailwind.
+   ============================================================ */
+
+/* Tabular numerics — apply to anything wrapped in .num */
+.num {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* Display number (hero balances, totals) */
+.display {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    letter-spacing: var(--tracking-display);
+    line-height: var(--leading-display);
+}
+
+/* Uppercased labels above values */
+.label {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-tag);
+    color: var(--color-ink-mute);
+}
+
+/* Small uppercased tag (fixed/recurrent flags) */
+.tag {
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-tag);
+    color: var(--color-ink-mute);
+}
+
+/* Dotted leader for legends — flex parent with gap */
+.leader { display: flex; align-items: baseline; gap: 8px; }
+.leader > .dots {
+    flex: 1;
+    border-bottom: 1px dotted var(--color-rule);
+    transform: translateY(-4px);
+}
+
+/* Bar track for shame / progress bars */
+.bar-track {
+    position: relative;
+    height: 6px;
+    background: var(--color-paper-3);
+    border-radius: var(--radius-pill);
+    overflow: hidden;
+}
+.bar-track > .bar {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--color-ink);
+}
+.bar-track.shame > .bar { background: var(--color-shame); }
+.bar-track > .marker {
+    position: absolute;
+    top: -3px; bottom: -3px;
+    width: 1px;
+    background: var(--color-ink-mute);
+}
+
+/* ============================================================
+   Base layer — picks up paper/ink via the alias mapping.
+   ============================================================ */
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+    body {
+        @apply bg-background text-foreground;
+        letter-spacing: -0.005em;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }
+    html {
+        @apply font-sans;
+    }
+}

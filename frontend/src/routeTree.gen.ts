@@ -9,27 +9,87 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as TransaccionesRouteImport } from './routes/transacciones'
+import { Route as PresupuestosRouteImport } from './routes/presupuestos'
+import { Route as IndexRouteImport } from './routes/index'
 
-export interface FileRoutesByFullPath {}
-export interface FileRoutesByTo {}
+const TransaccionesRoute = TransaccionesRouteImport.update({
+  id: '/transacciones',
+  path: '/transacciones',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PresupuestosRoute = PresupuestosRouteImport.update({
+  id: '/presupuestos',
+  path: '/presupuestos',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+
+export interface FileRoutesByFullPath {
+  '/': typeof IndexRoute
+  '/presupuestos': typeof PresupuestosRoute
+  '/transacciones': typeof TransaccionesRoute
+}
+export interface FileRoutesByTo {
+  '/': typeof IndexRoute
+  '/presupuestos': typeof PresupuestosRoute
+  '/transacciones': typeof TransaccionesRoute
+}
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
+  '/presupuestos': typeof PresupuestosRoute
+  '/transacciones': typeof TransaccionesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: never
+  fullPaths: '/' | '/presupuestos' | '/transacciones'
   fileRoutesByTo: FileRoutesByTo
-  to: never
-  id: '__root__'
+  to: '/' | '/presupuestos' | '/transacciones'
+  id: '__root__' | '/' | '/presupuestos' | '/transacciones'
   fileRoutesById: FileRoutesById
 }
-export interface RootRouteChildren {}
-
-declare module '@tanstack/react-router' {
-  interface FileRoutesByPath {}
+export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
+  PresupuestosRoute: typeof PresupuestosRoute
+  TransaccionesRoute: typeof TransaccionesRoute
 }
 
-const rootRouteChildren: RootRouteChildren = {}
+declare module '@tanstack/react-router' {
+  interface FileRoutesByPath {
+    '/transacciones': {
+      id: '/transacciones'
+      path: '/transacciones'
+      fullPath: '/transacciones'
+      preLoaderRoute: typeof TransaccionesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/presupuestos': {
+      id: '/presupuestos'
+      path: '/presupuestos'
+      fullPath: '/presupuestos'
+      preLoaderRoute: typeof PresupuestosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+  }
+}
+
+const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
+  PresupuestosRoute: PresupuestosRoute,
+  TransaccionesRoute: TransaccionesRoute,
+}
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()

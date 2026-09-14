@@ -64,6 +64,10 @@ _Avoid_: Raw amount
 The ARS-per-USD rate stored on a USD Transaction, with its rate type (blue, MEP, card...). It is filled in automatically as an estimate and can be replaced by the confirmed figure (e.g. from the card statement); once confirmed it never changes.
 _Avoid_: Current rate, conversion
 
+**Rate Snapshot**:
+A dollar rate as it stood on one date, for one rate type, kept so that past dates can be converted without asking the outside world again. A USD Transaction's own stored Exchange Rate stays authoritative for that Transaction; snapshots only fill the gaps.
+_Avoid_: Rate history, quote
+
 **Display Currency**:
 The single currency (ARS by default) in which Monthly Results and Budgets are shown, converted through each Transaction's stored Exchange Rate.
 _Avoid_: Currency toggle, base currency

@@ -2,6 +2,8 @@
 
 from httpx import AsyncClient
 
+from tests.conftest import TODAY
+
 
 async def default_category(client: AsyncClient, name: str, type: str) -> dict:
     response = await client.get("/categories/")
@@ -25,7 +27,7 @@ def transaction_body(**fields) -> dict:
         "amount": "1000.00",
         "currency": "ARS",
         "type": "expense",
-        "date": "2026-03-10",
+        "date": TODAY.isoformat(),
         **fields,
     }
 

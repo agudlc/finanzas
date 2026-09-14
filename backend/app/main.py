@@ -2,7 +2,15 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.routes.budgets import router as budgets_router
 from app.api.routes.categories import router as categories_router
+from app.api.routes.imports import (
+    profiles_router as import_profiles_router,
+    router as imports_router,
+    rules_router as categorization_rules_router,
+)
+from app.api.routes.installments import router as installments_router
+from app.api.routes.summary import router as summary_router
 from app.api.routes.settings import router as settings_router
 from app.api.routes.transactions import router as transactions_router
 from app.rates import RateUnavailable
@@ -31,6 +39,12 @@ async def rate_unavailable_handler(request: Request, error: RateUnavailable):
 app.include_router(categories_router, prefix="/api/v1")
 app.include_router(transactions_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
+app.include_router(installments_router, prefix="/api/v1")
+app.include_router(budgets_router, prefix="/api/v1")
+app.include_router(summary_router, prefix="/api/v1")
+app.include_router(import_profiles_router, prefix="/api/v1")
+app.include_router(categorization_rules_router, prefix="/api/v1")
+app.include_router(imports_router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -32,7 +32,7 @@ export default defineConfig([
     rules: {
       'react-refresh/only-export-components': [
         'error',
-        { allowExportNames: ['buttonVariants'] },
+        { allowExportNames: ['badgeVariants', 'buttonVariants', 'tabsListVariants'] },
       ],
     },
   },

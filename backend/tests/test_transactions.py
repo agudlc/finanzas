@@ -81,17 +81,6 @@ async def test_a_usd_transaction_carries_an_exchange_rate(client):
     assert created["exchange_rate_status"] == "estimated"
 
 
-async def test_a_usd_transaction_without_an_exchange_rate_is_rejected(client):
-    supermercado = await default_category(client, "Supermercado", "expense")
-
-    response = await client.post(
-        "/transactions/",
-        json=transaction_body(currency="USD", category_id=supermercado["id"]),
-    )
-
-    assert response.status_code == 422
-
-
 async def test_an_ars_transaction_carries_no_exchange_rate(client):
     supermercado = await default_category(client, "Supermercado", "expense")
 

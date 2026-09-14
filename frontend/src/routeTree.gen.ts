@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TransaccionesRouteImport } from './routes/transacciones'
 import { Route as PresupuestosRouteImport } from './routes/presupuestos'
+import { Route as AjustesRouteImport } from './routes/ajustes'
 import { Route as IndexRouteImport } from './routes/index'
 
 const TransaccionesRoute = TransaccionesRouteImport.update({
@@ -23,6 +24,11 @@ const PresupuestosRoute = PresupuestosRouteImport.update({
   path: '/presupuestos',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AjustesRoute = AjustesRouteImport.update({
+  id: '/ajustes',
+  path: '/ajustes',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -31,30 +37,34 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/ajustes': typeof AjustesRoute
   '/presupuestos': typeof PresupuestosRoute
   '/transacciones': typeof TransaccionesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/ajustes': typeof AjustesRoute
   '/presupuestos': typeof PresupuestosRoute
   '/transacciones': typeof TransaccionesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/ajustes': typeof AjustesRoute
   '/presupuestos': typeof PresupuestosRoute
   '/transacciones': typeof TransaccionesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/presupuestos' | '/transacciones'
+  fullPaths: '/' | '/ajustes' | '/presupuestos' | '/transacciones'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/presupuestos' | '/transacciones'
-  id: '__root__' | '/' | '/presupuestos' | '/transacciones'
+  to: '/' | '/ajustes' | '/presupuestos' | '/transacciones'
+  id: '__root__' | '/' | '/ajustes' | '/presupuestos' | '/transacciones'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AjustesRoute: typeof AjustesRoute
   PresupuestosRoute: typeof PresupuestosRoute
   TransaccionesRoute: typeof TransaccionesRoute
 }
@@ -75,6 +85,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PresupuestosRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ajustes': {
+      id: '/ajustes'
+      path: '/ajustes'
+      fullPath: '/ajustes'
+      preLoaderRoute: typeof AjustesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AjustesRoute: AjustesRoute,
   PresupuestosRoute: PresupuestosRoute,
   TransaccionesRoute: TransaccionesRoute,
 }

@@ -69,3 +69,23 @@ class TransactionUpdate(BaseModel):
 class TransactionResponse(TransactionBase):
     id: uuid.UUID
     created_at: datetime
+
+
+class RefundCreate(BaseModel):
+    """A Refund recorded against the Expense it reverses."""
+
+    amount: Decimal = Field(gt=0, description="how much came back, as a positive figure")
+    date: Date
+    description: str | None = None
+    notes: str | None = None
+
+
+class TransactionFilters(BaseModel):
+    """How the Transactions list is narrowed down."""
+
+    month: Date | None = None
+    date: Date | None = None
+    type: TransactionType | None = None
+    category_id: uuid.UUID | None = None
+    currency: Currency | None = None
+    limit: int | None = Field(default=None, ge=1)

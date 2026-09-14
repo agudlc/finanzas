@@ -1,14 +1,22 @@
 import uuid
+from datetime import date as Date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import InstallmentPurchase, Transaction
 from app.models.enums import ConfirmationStatus, Currency, TransactionType
-from app.schemas.transaction import TransactionCreate, TransactionUpdate
+from app.months import add_months
+from app.schemas.transaction import (
+    RefundCreate,
+    TransactionCreate,
+    TransactionFilters,
+    TransactionUpdate,
+)
 from app.services.categories import get_category
 from app.services.errors import Conflict, Invalid, NotFound
+from app.services.money import RateEstimator
 
 EXCHANGE_RATE_FIELDS = ("exchange_rate", "exchange_rate_type", "exchange_rate_status")
 
@@ -20,22 +28,94 @@ async def get_transaction(db: AsyncSession, transaction_id: uuid.UUID) -> Transa
     return transaction
 
 
-async def list_transactions(db: AsyncSession) -> list[Transaction]:
-    result = await db.execute(
-        select(Transaction).order_by(Transaction.date.desc(), Transaction.created_at)
+def newest_first(statement: Select) -> Select:
+    return statement.order_by(
+        Transaction.date.desc(), Transaction.created_at.desc()
     )
+
+
+def in_month(statement: Select, month: Date) -> Select:
+    return statement.where(Transaction.date >= month).where(
+        Transaction.date < add_months(month, 1)
+    )
+
+
+async def list_transactions(
+    db: AsyncSession, filters: TransactionFilters | None = None
+) -> list[Transaction]:
+    filters = filters or TransactionFilters()
+    statement = newest_first(select(Transaction))
+    if filters.month is not None:
+        statement = in_month(statement, filters.month)
+    if filters.date is not None:
+        statement = statement.where(Transaction.date == filters.date)
+    if filters.type is not None:
+        statement = statement.where(Transaction.type == filters.type)
+    if filters.category_id is not None:
+        statement = statement.where(Transaction.category_id == filters.category_id)
+    if filters.currency is not None:
+        statement = statement.where(Transaction.currency == filters.currency)
+    if filters.limit is not None:
+        statement = statement.limit(filters.limit)
+    result = await db.execute(statement)
     return list(result.scalars().all())
 
 
-async def create_transaction(
-    db: AsyncSession, data: TransactionCreate
+async def build_transaction(
+    db: AsyncSession, data: TransactionCreate, estimator: RateEstimator
 ) -> Transaction:
+    """
+    A checked, estimated Transaction, added to the session but not committed.
+
+    Callers that write several Transactions at once — the cuotas of an
+    Installment Purchase, the rows of an Import — build them all and commit
+    once, so a failure halfway through leaves nothing behind.
+    """
+    data = await estimator.fill_in(data)
     await _check_domain_rules(db, data, transaction_id=None)
     transaction = Transaction(**data.model_dump())
     db.add(transaction)
+    return transaction
+
+
+async def create_transaction(
+    db: AsyncSession, data: TransactionCreate, estimator: RateEstimator
+) -> Transaction:
+    transaction = await build_transaction(db, data, estimator)
     await db.commit()
     await db.refresh(transaction)
     return transaction
+
+
+async def create_refund(
+    db: AsyncSession,
+    original_id: uuid.UUID,
+    data: RefundCreate,
+    estimator: RateEstimator,
+) -> Transaction:
+    """
+    A Refund recorded against the Expense it reverses.
+
+    It takes that Expense's Category and currency, so the Category's spending
+    reflects what was really spent.
+    """
+    original = await get_transaction(db, original_id)
+    if original.type is not TransactionType.expense:
+        raise Invalid("a Refund can only reverse an Expense")
+    if original.amount < Decimal(0):
+        raise Invalid("a Refund cannot reverse another Refund")
+
+    refund = TransactionCreate(
+        amount=-abs(data.amount),
+        currency=original.currency,
+        type=TransactionType.expense,
+        category_id=original.category_id,
+        date=data.date,
+        description=data.description or original.description,
+        notes=data.notes,
+        refund_of_id=original.id,
+    )
+    return await create_transaction(db, refund, estimator)
 
 
 async def update_transaction(
@@ -45,6 +125,7 @@ async def update_transaction(
     changed = changes.model_dump(exclude_unset=True)
 
     _check_exchange_rate_is_not_rewritten(transaction, changed)
+    _confirm_a_cuota_whose_amount_was_edited(transaction, changed)
     after = TransactionCreate.model_validate(transaction).model_copy(update=changed)
     await _check_domain_rules(db, after, transaction_id=transaction_id)
 
@@ -59,6 +140,19 @@ async def delete_transaction(db: AsyncSession, transaction_id: uuid.UUID) -> Non
     transaction = await get_transaction(db, transaction_id)
     await db.delete(transaction)
     await db.commit()
+
+
+def _confirm_a_cuota_whose_amount_was_edited(
+    transaction: Transaction, changed: dict
+) -> None:
+    """
+    Editing a cuota's amount means the statement arrived, so it is no longer an
+    estimate: interest or a USD difference is now the settled figure.
+    """
+    if transaction.installment_purchase_id is None:
+        return
+    if "amount" in changed and "amount_status" not in changed:
+        changed["amount_status"] = ConfirmationStatus.confirmed
 
 
 def _check_exchange_rate_is_not_rewritten(

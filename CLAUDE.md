@@ -1,3 +1,8 @@
+## Committing
+
+Stage the work, then stop and ask. The user reads the diff in VS Code and says
+when to go ahead. This holds even when a skill says to commit.
+
 ## Agent skills
 
 ### Issue tracker

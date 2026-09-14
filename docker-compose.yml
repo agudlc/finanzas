@@ -9,6 +9,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agudlc -d finagudlc"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
 
   backend:
     build:
@@ -20,7 +25,23 @@ services:
     volumes:
       - ./backend:/app
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000/api/v1
+    volumes:
+      - ./frontend:/app
+      # Keep the image's install, which the bind mount above would otherwise hide.
+      - /app/node_modules
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:

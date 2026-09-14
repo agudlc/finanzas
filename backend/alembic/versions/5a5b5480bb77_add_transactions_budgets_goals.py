@@ -64,3 +64,8 @@ def downgrade() -> None:
     op.drop_table('budgets')
     op.drop_table('goals')
     # ### end Alembic commands ###
+    # These tables introduced the enum types, so they own dropping them; without
+    # this, re-upgrading after a downgrade fails on the leftover types.
+    bind = op.get_bind()
+    sa.Enum(name='typeenum').drop(bind, checkfirst=True)
+    sa.Enum(name='currencyenum').drop(bind, checkfirst=True)

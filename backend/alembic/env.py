@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -22,6 +23,12 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 from app.models import Base
 target_metadata = Base.metadata
+
+# The database is chosen by DATABASE_URL when set, so the same migrations run
+# against the development database and against the disposable test database.
+database_url = os.environ.get("DATABASE_URL")
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

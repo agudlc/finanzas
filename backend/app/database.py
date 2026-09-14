@@ -1,17 +1,22 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.orm import DeclarativeBase
 import os
+from functools import lru_cache
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-assert DATABASE_URL, "DATABASE_URL environment variable is not set"
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 
-engine = create_async_engine(DATABASE_URL, echo=True)
-
-SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 class Base(DeclarativeBase):
     pass
 
+
+@lru_cache(maxsize=1)
+def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    database_url = os.environ.get("DATABASE_URL")
+    assert database_url, "DATABASE_URL environment variable is not set"
+    engine = create_async_engine(database_url)
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+
 async def get_db():
-    async with SessionLocal() as session:
+    async with get_sessionmaker()() as session:
         yield session

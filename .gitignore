@@ -8,3 +8,7 @@ frontend/node_modules
 
 # Environment
 .env
+
+# Real bank/fintech exports (personal financial data)
+samples/*
+!samples/README.md

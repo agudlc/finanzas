@@ -10,18 +10,21 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 from app.models.enums import (
+    SCHEDULED_TRIGGERS,
     ConfirmationStatus,
     Currency,
     NumberFormat,
@@ -301,9 +304,29 @@ class Review(Base):
     """
 
     __tablename__ = "reviews"
+    # A scheduled Review happens once per month, and the database is what says
+    # so: the cron and a user opening the Inbox can both decide it is missing
+    # at the same moment, and only one of them gets to create it. Only the
+    # scheduled triggers are covered — the user can ask as often as they like,
+    # and an event can happen as often as it happens.
+    __table_args__ = (
+        Index(
+            "uq_scheduled_review_per_month",
+            "trigger",
+            "month",
+            unique=True,
+            postgresql_where=text(
+                "trigger IN ("
+                + ", ".join(f"'{one.value}'" for one in SCHEDULED_TRIGGERS)
+                + ")"
+            ),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     trigger: Mapped[ReviewTrigger] = mapped_column(Enum(ReviewTrigger))
+    # The month the run is about, stored as its first day.
+    month: Mapped[Date] = mapped_column(DateColumn)
     status: Mapped[ReviewStatus] = mapped_column(
         Enum(ReviewStatus), default=ReviewStatus.queued
     )

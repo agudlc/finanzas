@@ -147,11 +147,12 @@ async def test_a_review_that_does_not_exist_returns_404(client):
 
 
 async def test_the_inbox_counts_what_is_pending(client):
-    await create_recurring(client, description="Alquiler")
-    await create_recurring(client, description="Netflix", expected_day=12)
-
+    # Read before there is anything to propose: this month's own Review runs
+    # on the first read, and would otherwise propose the templates below.
     assert (await inbox(client))["pending_count"] == 0
 
+    await create_recurring(client, description="Alquiler")
+    await create_recurring(client, description="Netflix", expected_day=12)
     await run_review(client)
 
     assert (await inbox(client))["pending_count"] == 2
@@ -163,8 +164,12 @@ async def test_the_inbox_shows_a_review_that_is_still_waiting(client, queue):
 
     waiting = await inbox(client)
 
-    assert [one["id"] for one in waiting["reviews"]] == [review["id"]]
-    assert waiting["reviews"][0]["status"] == "queued"
+    assert [one["trigger"] for one in waiting["reviews"]] == [
+        "recurring_monthly",
+        "manual",
+    ], "the month's own Review was caught up on by the read, and is held too"
+    assert review["id"] in [one["id"] for one in waiting["reviews"]]
+    assert all(one["status"] == "queued" for one in waiting["reviews"])
     assert waiting["suggestions"] == []
 
 

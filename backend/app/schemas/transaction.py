@@ -29,6 +29,9 @@ class TransactionBase(BaseModel):
     refund_of_id: uuid.UUID | None = None
     installment_purchase_id: uuid.UUID | None = None
     installment_number: int | None = Field(default=None, ge=1)
+    # Set when the Expense was recorded by accepting a Recurring Expense's
+    # Suggestion, so "the last amount actually paid" can be read off it.
+    recurring_expense_id: uuid.UUID | None = None
     import_id: uuid.UUID | None = None
 
     # Lets a stored Transaction be read back into this shape, so an update can

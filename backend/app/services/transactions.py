@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import InstallmentPurchase, Transaction
+from app.models import InstallmentPurchase, RecurringExpense, Transaction
 from app.models.enums import ConfirmationStatus, Currency, TransactionType
 from app.months import add_months
 from app.schemas.transaction import (
@@ -175,6 +175,7 @@ async def _check_domain_rules(
     _check_only_expenses_go_negative(after)
     await _check_refund(db, after, transaction_id)
     await _check_installment(db, after)
+    await _check_recurring_expense(db, after)
 
 
 async def _check_category_type_matches(
@@ -237,3 +238,15 @@ async def _check_installment(db: AsyncSession, after: TransactionCreate) -> None
         raise Invalid("only an Expense can be a cuota of an Installment Purchase")
     if await db.get(InstallmentPurchase, purchase_id) is None:
         raise NotFound(f"no Installment Purchase with id {purchase_id}")
+
+
+async def _check_recurring_expense(db: AsyncSession, after: TransactionCreate) -> None:
+    """A Transaction can only come from a Recurring Expense that exists."""
+    if after.recurring_expense_id is None:
+        return
+    if after.type is not TransactionType.expense:
+        raise Invalid("only an Expense can come from a Recurring Expense")
+    if await db.get(RecurringExpense, after.recurring_expense_id) is None:
+        raise NotFound(
+            f"no Recurring Expense with id {after.recurring_expense_id}"
+        )

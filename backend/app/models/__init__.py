@@ -182,6 +182,12 @@ class Transaction(Base):
     )
     installment_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # The Recurring Expense this came from, when it was recorded by accepting
+    # its Suggestion. It is what makes "the last amount actually paid" exact.
+    recurring_expense_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("recurring_expenses.id"), nullable=True
+    )
+
     import_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("imports.id"), nullable=True
     )

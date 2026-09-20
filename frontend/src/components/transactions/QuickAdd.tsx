@@ -6,7 +6,12 @@ import { ErrorText, Field, SelectField } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { RATE_TYPE_LABEL, decimal, today } from '@/lib/format';
+import {
+  CURRENCY_OPTIONS,
+  RATE_TYPE_LABEL,
+  decimal,
+  today,
+} from '@/lib/format';
 import {
   useCategories,
   useCreatePurchase,
@@ -21,11 +26,6 @@ const KINDS: { value: Kind; label: string }[] = [
   { value: 'income', label: 'Ingreso' },
   { value: 'refund', label: 'Reintegro' },
   { value: 'installments', label: 'En cuotas' },
-];
-
-const CURRENCIES = [
-  { value: 'ARS', label: 'Pesos (ARS)' },
-  { value: 'USD', label: 'Dólares (USD)' },
 ];
 
 const RATE_TYPES = (Object.keys(RATE_TYPE_LABEL) as RateType[])
@@ -154,7 +154,7 @@ export default function QuickAdd({ onDone }: { onDone?: () => void }) {
           <SelectField
             value={currency}
             onChange={(next) => setCurrency(next as Currency)}
-            options={CURRENCIES}
+            options={CURRENCY_OPTIONS}
           />
         </Field>
 

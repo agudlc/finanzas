@@ -50,7 +50,7 @@ See `CONTEXT.md` for precise definitions. The essentials:
 - **Budgets** are per Category per month, judged against **Pace** (how much "should" be spent by today), escalating at 80% and 100%.
 - **Goals** progress through **Contributions**. A Contribution is not an Expense and does not change the Monthly Result.
 - **Recurring Expenses** are templates that produce a monthly Suggestion — amount = last amount paid, or an **Adjustment Rule** (every N months by % or by IPC) for contract-indexed costs like rent.
-- **Agent:** a **Review** is one agent run. It produces **Suggestions** (pending → accepted, possibly edited / rejected with optional reason / expired) and **Insights** (read-only observations, dismissible, kept as history). Both wait in the **Inbox**. Rejections and past Insights feed later Reviews.
+- **Agent:** a **Review** is one run that produces **Suggestions** (pending → accepted, possibly edited / rejected with optional reason / expired) and **Insights** (read-only observations, shown during their month, kept as history). Some Reviews run the agent, others are plain arithmetic (ADR-0003). Both wait in the **Inbox**. Rejections and past Insights feed later Reviews.
  
 ---
  
@@ -187,7 +187,7 @@ Transparent floating pill at the bottom center of the viewport. Active page show
 | Local orchestration | Docker Compose | One command to run everything |
 | Dev script | Makefile | `make dev` starts all services |
 | Dollar rates | dolarapi.com | Free blue/MEP/CCL/card rates for estimated Exchange Rates |
-| Inflation (IPC) | datos.gob.ar INDEC series / argentinadatos.com, with manual override | Official index; INDEC publishes mid-month and APIs break |
+| Inflation (IPC) | datos.gob.ar series `145.3_INGNACUAL_DICI_M_38`, with manual override | Official INDEC series at full precision; fails loudly. No automatic failover: argentinadatos rounds, uses other units and has served stale data |
  
 ---
  
@@ -203,22 +203,31 @@ Goal: real data flowing in, visible and judged against budgets. No agent yet.
 - Quick add form (expense, income, cuotas, refund)
 - Budgets with the shame UI; month rollover copies last month's budgets
 - Import of Mercado Pago and Lemon CSV/XLSX exports via Import Profiles, Categorization Rules and duplicate detection
-### Phase 2 — Ambient agent
+### Phase 2a — Suggestions without the agent
+Goal: a working Inbox fed by deterministic Reviews, before any LLM is involved.
+
+- Redis + ARQ worker in Docker Compose; Review producers are plain functions so tests stay Postgres-only
+- Review, Suggestion (closed kinds: `add_transaction`, `set_budget`) and the Inbox at `/bandeja`, polled
+- Accept (whole payload editable, applied through the existing services) / reject ("not this month") / lazy expiry per kind; dedupe key per kind
+- Recurring Expenses with Adjustment Rules; a `recurring_monthly` Review on the 1st proposes each month's payments
+- IPC fetch from datos.gob.ar with staleness check and manual override (manual wins); unpublished months leave the adjustment pending, not the Suggestion
+- `month_end` Review on the 1st proposes adjusting the copied Budgets: last Budget × (1 + latest IPC), ARS only, rounded to $1.000
+- Manual "Revisar ahora"; reading the Inbox queues any of this month's scheduled Reviews that are missing (the cron usually got there first)
+### Phase 2b — Ambient agent
 Goal: the agent reviews your data on its own and proposes improvements.
- 
-- Redis + ARQ worker in Docker Compose
-- Review triggers: import finished, budget crosses 100%, month end, manual
-- Hand-written Claude tool-use loop producing Suggestions and Insights
-- Inbox: accept / edit / reject Suggestions, dismiss Insights; rejections and past Insights feed later Reviews
-- Recurring Expenses with Adjustment Rules, suggested monthly
-- IPC fetch with manual override
-- Month-end Budget Suggestions (actual spending + inflation)
-- PDF statements read by the agent and turned into Suggestions
-- Agent-suggested categories for uncategorized imports; accepted ones become Categorization Rules
+
+- Hand-written Claude tool-use loop (API key, Sonnet by default, 10-iteration cap, retries only on 429/529)
+- Tailored seed brief per trigger plus read-only tools; history capped by a quarterly/annual setting
+- Triggers: `import_finished` (coalesced), `budget_exceeded` (100%, once per Budget), `month_end`, `manual`
+- Insights, shown during their month; rejections and past Insights feed later Reviews
+- New kinds: `recategorize_transaction`, `add_categorization_rule` (future imports only), `add_recurring_expense`
+- Agent month-end budgets supersede the arithmetic producer, which becomes its fallback
+- Transcript, tokens and `prompt_version` stored per Review; `LLMClient` Protocol with a scripted fake for tests, manual `make eval` for judgment
 ### Phase 3 — Complete the picture
 Goal: the remaining tracking and analysis features.
  
 - Goals with Contributions and progress/pace toward the deadline
+- PDF statements read by the agent and turned into Suggestions
 - Full Transactions, Budgets, Analysis and Goals views; period filters per component
 - Future commitments view (remaining cuotas)
 - Chat about Inbox items (Vercel AI SDK useChat), context-aware of the current screen
@@ -370,14 +379,30 @@ created_at      timestamp
  
 ### Phase 2
  
+#### Transaction (additions)
+```
+recurring_expense_id    fk → RecurringExpense, optional   set when accepted from its Suggestion
+```
+ 
+#### Budget (additions)
+```
+exceeded_review_id      fk → Review, optional   the Review fired when it crossed 100%; fires once
+```
+ 
+#### Settings (additions)
+```
+agent_lookback          enum: quarter | year, default quarter   hard cap on what the agent reads
+```
+ 
 #### RecurringExpense
 ```
 id                  uuid, pk
 description         text
 category_id         fk → Category
 currency            enum: ARS | USD
-reference_amount    numeric(12, 2)
+reference_amount    numeric(12, 2)      stands in until a linked Transaction exists
 expected_day        int
+is_fixed            boolean
 adjustment_kind     enum: none | percentage | index, default none
 adjustment_every    int, optional       months
 adjustment_value    numeric, optional   % when percentage
@@ -389,16 +414,24 @@ active              boolean
 ```
 month           date (first day of month), pk
 index           text, pk                e.g. IPC
-value           numeric                 monthly variation
-source          enum: api | manual
+value           numeric                 monthly variation in percentage points (1.659 = 1.659%)
+source          enum: api | manual      manual is never overwritten by a fetch
 ```
  
 #### Review
 ```
 id              uuid, pk
-trigger         enum: import | budget_exceeded | month_end | manual
+trigger         enum: recurring_monthly | month_end | manual | import_finished | budget_exceeded
 status          enum: queued | running | done | failed
-started_at      timestamp
+uses_agent      boolean
+error           text, optional
+note            text, optional          e.g. "hit the iteration cap"
+messages        jsonb, optional         agent transcript
+input_tokens    int, optional
+output_tokens   int, optional
+prompt_version  text, optional
+created_at      timestamp
+started_at      timestamp, optional
 finished_at     timestamp, optional
 ```
  
@@ -406,19 +439,23 @@ finished_at     timestamp, optional
 ```
 id              uuid, pk
 review_id       fk → Review
-kind            text                    e.g. recategorize | add_recurring | set_budget | add_transaction
-payload         jsonb                   the proposed change
+kind            enum: add_transaction | set_budget | recategorize_transaction | add_categorization_rule | add_recurring_expense
+month           date (first day of month)       the month it is about
+dedupe_key      text                    per kind, e.g. recurring_expense_id + month
+payload         jsonb                   validated per kind
 rationale       text
 status          enum: pending | accepted | rejected | expired
 rejection_reason text, optional
-expires_at      timestamp, optional
+expires_at      timestamp
 resolved_at     timestamp, optional
+created_at      timestamp
 ```
  
-#### Insight
+#### Insight (2b)
 ```
 id              uuid, pk
 review_id       fk → Review
+month           date (first day of month)
 topic           text
 body            text
 dismissed_at    timestamp, optional
@@ -484,11 +521,17 @@ created_at      timestamp
 | Cuotas | Installment Purchase → one estimated expense per month | Inflation makes cuotas a strategy; budgets see the monthly share |
 | Goals | Progress = sum of Contributions; not expenses | Saving isn't spending; gives the agent real history |
 | Budget enforcement | Visible shame vs pace, no hard blocks | Reflection over friction |
-| Budget rollover | Month-end Review suggests; copy as fallback | Inflation makes copied amounts wrong |
+| Budget rollover | Copy last month's as a floor; month-end Review suggests adjustments | Never an empty month; inflation makes copied amounts wrong |
 | Recurring amounts | Last amount paid, or adjustment rule (% / IPC) | Inflation; rent follows contracts |
-| Import | CSV/XLSX via profiles + rules; PDF via agent Suggestions | Real export formats vary and are often PDF |
+| Import | CSV/XLSX via profiles + rules; PDF via agent Suggestions (phase 3) | Real export formats vary and are often PDF |
+| Uncategorized Transactions | Never; the agent improves rules after an Import (ADR-0004) | Every view assumes a Category |
 | Agent authority | Suggestions only, user accepts (ADR-0002) | Silent mistakes in financial data are costly and hard to notice |
-| Agent triggers | Import, budget over 100%, month end, manual | Ambient but not noisy or expensive |
+| Review scope | Every Suggestion comes from a Review, agent or not (ADR-0003) | One lifecycle for the Inbox |
+| Suggestion kinds | Closed list, typed payloads, applied via the normal services | Makes ADR-0002 enforceable |
+| Agent triggers | Import (coalesced), budget over 100% once, month end, manual | Ambient but not noisy or expensive |
+| LLM access | Console API key, not the Claude subscription | Subscriptions don't include API access |
+| Agent history | Hard cap, quarterly or annual (setting) | Bounds cost and data sent to the API |
+| Inbox updates | Polling | One user, one tab; streaming waits for chat |
 | Agent surface | Inbox first, chat secondary | The inbox is the new pattern to learn; chat is well-trodden |
 | Background jobs | Redis + ARQ from phase 2 | Reviews are slow; real worker is the learning goal |
 | Agent framework | Hand-written loop first, LangGraph in phase 4 | Understand what the framework adds |
@@ -518,4 +561,4 @@ make dev
  
 ---
  
-*Last updated: September 2026 — domain design grilled; see CONTEXT.md and docs/adr/. Phase 1 backend skeleton done, model fixes next.*
+*Last updated: September 2026 — Phase 1 done; Phase 2 grilled and split into 2a (deterministic Suggestions and Inbox) and 2b (the agent). See CONTEXT.md and docs/adr/.*

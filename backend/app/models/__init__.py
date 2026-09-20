@@ -107,6 +107,40 @@ class InstallmentPurchase(Base):
     )
 
 
+class RecurringExpense(Base):
+    """
+    A template for an Expense expected every month.
+
+    It never creates Transactions itself: each month a Review turns it into a
+    Suggestion. Deactivating it stops those Suggestions without losing the
+    template or anything it has produced.
+    """
+
+    __tablename__ = "recurring_expenses"
+    __table_args__ = (
+        CheckConstraint(
+            "expected_day BETWEEN 1 AND 31", name="recurring_expenses_expected_day"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    description: Mapped[str] = mapped_column(String(250))
+    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("categories.id"))
+    currency: Mapped[Currency] = mapped_column(Enum(Currency))
+    # What the Expense is expected to cost, until a Transaction says otherwise.
+    reference_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # The day of the month it falls on; a shorter month clamps it to its last.
+    expected_day: Mapped[int] = mapped_column(Integer)
+    is_fixed: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self):
+        return f"<RecurringExpense {self.description}>"
+
+
 class Transaction(Base):
     __tablename__ = "transactions"
 

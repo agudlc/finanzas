@@ -4,6 +4,7 @@ import { Plus, Upload } from 'lucide-react';
 
 import ImportDialog from '@/components/transactions/ImportDialog';
 import QuickAdd from '@/components/transactions/QuickAdd';
+import RecurringExpenses from '@/components/transactions/RecurringExpenses';
 import TransactionList from '@/components/transactions/TransactionList';
 import MonthPicker from '@/components/MonthPicker';
 import { Button } from '@/components/ui/button';
@@ -119,6 +120,7 @@ function Transacciones() {
         />
       </section>
 
+      <RecurringExpenses />
       <InstallmentPurchases />
       <ImportHistory />
 

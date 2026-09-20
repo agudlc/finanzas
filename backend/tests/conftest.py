@@ -4,7 +4,8 @@ The one seam these tests drive is the HTTP API.
 Every test talks to the FastAPI app over httpx against a real Postgres database
 migrated to head, and asserts only on responses. The only fakes are at the
 edges, through dependency overrides: a fixed clock, a fixed source of dollar
-rates, and a queue that runs Reviews in-process instead of through Redis.
+rates, a fixed source of inflation index values, and a queue that runs Reviews
+in-process instead of through Redis.
 """
 
 import asyncio
@@ -23,6 +24,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.clock import Clock, get_clock
 from app.database import get_db
+from app.inflation import IPC, IndexUnavailable, get_index_source
 from app.main import app
 from app.models.enums import RateType, ReviewTrigger
 from app.queue import get_review_queue
@@ -66,6 +68,43 @@ class FixedRateSource:
         if rate_type not in self.rates:
             raise RateUnavailable(f"{rate_type.value} rates are not published")
         return self.rates[rate_type]
+
+
+# The IPC as the fake publishes it. TODAY is the 15th of March 2026, so
+# February is the newest month the official series could already carry.
+FIXED_IPC = [
+    (date(2025, 11, 1), Decimal("2.400")),
+    (date(2025, 12, 1), Decimal("2.100")),
+    (date(2026, 1, 1), Decimal("1.900")),
+    (date(2026, 2, 1), Decimal("1.659")),
+]
+
+
+class FixedIndexSource:
+    """
+    Stands in for datos.gob.ar so the IPC never moves under a test.
+
+    `points` is the series as published, in percentage points; leaving only
+    old months in it is how a test says "the series has gone stale", and
+    `fail_with` how it says the request itself broke. `fetches` counts the
+    requests, so a test can say a fetch did not happen twice.
+    """
+
+    name = IPC
+
+    def __init__(self):
+        self.points = list(FIXED_IPC)
+        self.failure: str | None = None
+        self.fetches = 0
+
+    def fail_with(self, message: str) -> None:
+        self.failure = message
+
+    async def fetch(self) -> list[tuple[date, Decimal]]:
+        self.fetches += 1
+        if self.failure is not None:
+            raise IndexUnavailable(self.failure)
+        return list(self.points)
 
 
 class EagerReviewQueue:
@@ -200,6 +239,11 @@ def rate_source() -> FixedRateSource:
 
 
 @pytest.fixture
+def index_source() -> FixedIndexSource:
+    return FixedIndexSource()
+
+
+@pytest.fixture
 async def queue(engine, clock) -> EagerReviewQueue:
     return EagerReviewQueue(
         async_sessionmaker(engine, expire_on_commit=False), clock
@@ -207,7 +251,7 @@ async def queue(engine, clock) -> EagerReviewQueue:
 
 
 @pytest.fixture
-async def client(clean_database, engine, clock, rate_source, queue):
+async def client(clean_database, engine, clock, rate_source, index_source, queue):
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 
     async def override_get_db():
@@ -217,6 +261,7 @@ async def client(clean_database, engine, clock, rate_source, queue):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_clock] = lambda: clock
     app.dependency_overrides[get_rate_source] = lambda: rate_source
+    app.dependency_overrides[get_index_source] = lambda: index_source
     app.dependency_overrides[get_review_queue] = lambda: queue
 
     transport = ASGITransport(app=app)

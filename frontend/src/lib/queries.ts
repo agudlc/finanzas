@@ -23,6 +23,7 @@ import type {
   Inbox,
   ImportProfile,
   ImportRecord,
+  InflationIndex,
   InstallmentPurchase,
   MonthlySpending,
   MonthlySummary,
@@ -47,6 +48,8 @@ export const keys = {
   rules: ['categorization-rules'] as const,
   imports: ['imports'] as const,
   inbox: ['inbox'] as const,
+  inflation: (params: Record<string, string | undefined> = {}) =>
+    ['inflation-indexes', params] as const,
 };
 
 /** Anything that changes money makes all of these stale. */
@@ -88,6 +91,7 @@ const RULES = [[...keys.rules]];
 const SETTINGS = [[...keys.settings], ...MONEY];
 const RECURRING = [[...keys.recurring]];
 const INBOX = [[...keys.inbox]];
+const INFLATION = [['inflation-indexes']];
 
 export function useCategories() {
   return useQuery({
@@ -107,6 +111,24 @@ export function useUpdateSettings() {
   return useWrite(
     (changes: Partial<Settings>) => api.patch<Settings>('/settings/', changes),
     SETTINGS,
+  );
+}
+
+/** The Inflation Index month by month, defaulting to the last year. */
+export function useInflationIndexes(
+  params: { from_month?: string; to_month?: string } = {},
+) {
+  return useQuery({
+    queryKey: keys.inflation(params),
+    queryFn: () => api.get<InflationIndex[]>(`/inflation-indexes/${query(params)}`),
+  });
+}
+
+export function useSetInflationIndex() {
+  return useWrite(
+    ({ month, value }: { month: string; value: string }) =>
+      api.put<InflationIndex>(`/inflation-indexes/${month}`, { value }),
+    INFLATION,
   );
 }
 

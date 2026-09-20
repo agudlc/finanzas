@@ -7,9 +7,17 @@ import { Button } from '@/components/ui/button';
 import { Empty, ErrorText, Field, PageTitle, SelectField } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
-import { RATE_TYPE_LABEL } from '@/lib/format';
+import {
+  RATE_TYPE_LABEL,
+  decimal,
+  monthKey,
+  monthName,
+  shiftMonth,
+} from '@/lib/format';
 import {
   useCategories,
+  useInflationIndexes,
+  useSetInflationIndex,
   useCreateCategory,
   useDeleteCategory,
   useDeleteProfile,
@@ -32,6 +40,8 @@ function Ajustes() {
     <div className="flex w-full max-w-3xl flex-col gap-10">
       <PageTitle>Ajustes</PageTitle>
       <Preferences />
+      <Separator />
+      <InflationIndexes />
       <Separator />
       <Categories />
       <Separator />
@@ -82,6 +92,80 @@ function Preferences() {
         </Field>
       </div>
       <ErrorText error={update.error} />
+    </section>
+  );
+}
+
+/** The last twelve months, newest first. */
+const MONTHS_SHOWN = 12;
+
+function InflationIndexes() {
+  // The months shown are also the months asked for, so a value can never come
+  // back with no row to show it in.
+  const months = Array.from({ length: MONTHS_SHOWN }, (_, back) =>
+    shiftMonth(monthKey(new Date()), -back),
+  );
+  const indexes = useInflationIndexes({
+    from_month: months[months.length - 1],
+    to_month: months[0],
+  });
+  const set = useSetInflationIndex();
+
+  const known = new Map(
+    (indexes.data ?? []).map((index) => [index.month.slice(0, 7), index]),
+  );
+
+  return (
+    <section className="flex flex-col gap-4">
+      <h2 className="label">Índice de inflación</h2>
+      <p className="text-xs text-ink-mute">
+        El IPC que publica el INDEC, mes a mes. Si escribís un valor, ese manda:
+        una actualización posterior nunca lo pisa.
+      </p>
+
+      {/* The rows wait for the values: they seed the fields, once. */}
+      {indexes.data ? (
+        <ul className="w-full">
+          {months.map((month) => {
+            const index = known.get(month);
+            return (
+              <li
+                key={month}
+                className="flex items-center gap-3 border-b border-rule-soft py-2"
+              >
+                <span className="w-40 text-sm">{monthName(month)}</span>
+                <Input
+                  className="max-w-24 text-right"
+                  inputMode="decimal"
+                  placeholder="—"
+                  aria-label={`IPC de ${monthName(month)}`}
+                  defaultValue={index ? index.value.replace('.', ',') : ''}
+                  onBlur={(event) => {
+                    const typed = event.target.value.trim();
+                    if (!typed) return;
+                    const value = decimal(typed);
+                    // "2" and "2.000" are the same value written differently.
+                    if (Number(value) !== Number(index?.value)) {
+                      set.mutate({ month, value });
+                    }
+                  }}
+                />
+                <span className="text-sm text-ink-mute">%</span>
+                <span className="flex-1" />
+                <span className="tag">
+                  {index === undefined
+                    ? 'sin publicar'
+                    : index.source === 'manual'
+                      ? 'a mano'
+                      : 'INDEC'}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      <ErrorText error={indexes.error ?? set.error} />
     </section>
   );
 }

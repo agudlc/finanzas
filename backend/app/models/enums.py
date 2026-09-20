@@ -51,6 +51,13 @@ class RuleOrigin(str, enum.Enum):
     suggestion = "suggestion"
 
 
+class IndexOrigin(str, enum.Enum):
+    """Where a month's Inflation Index value came from."""
+
+    api = "api"
+    manual = "manual"
+
+
 class BudgetState(str, enum.Enum):
     """How a Budget's spending stands against its amount and its Pace."""
 

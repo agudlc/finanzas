@@ -15,6 +15,7 @@ export type ReviewTrigger = 'recurring_monthly' | 'month_end' | 'manual';
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed';
 export type SuggestionKind = 'add_transaction';
 export type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
+export type IndexOrigin = 'api' | 'manual';
 
 export interface Category {
   id: string;
@@ -111,6 +112,17 @@ export interface MonthlySummary {
 export interface Settings {
   display_currency: Currency;
   default_rate_type: RateType;
+}
+
+/** How much prices moved in one month, in percentage points: 1.659 is 1.659%. */
+export interface InflationIndex {
+  id: string;
+  name: string;
+  /** The month it describes, as its first day. */
+  month: string;
+  value: string;
+  source: IndexOrigin;
+  updated_at: string;
 }
 
 export interface ColumnMapping {

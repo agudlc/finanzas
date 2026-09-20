@@ -42,3 +42,13 @@ def add_months(day: Date, months: int) -> Date:
     year = day.year + total // 12
     month = total % 12 + 1
     return Date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def months_from(start: Date, end: Date) -> list[Date]:
+    """Every month from `start` to `end`, as first days. Empty if end < start."""
+    months = []
+    month = start
+    while month <= end:
+        months.append(month)
+        month = add_months(month, 1)
+    return months

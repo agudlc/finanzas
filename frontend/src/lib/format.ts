@@ -37,6 +37,20 @@ export function decimal(typed: string): string {
   return typed.trim().replace(/\./g, '').replace(',', '.');
 }
 
+/**
+ * An amount as the API writes it ("450000.00"), as the user would have typed it.
+ *
+ * The inverse of `decimal`, so a form seeded from the API and submitted
+ * untouched sends back exactly what it was given. Without it the thousands
+ * dots the API never wrote are read as separators and stripped.
+ */
+export function typedAmount(amount: string): string {
+  return new Intl.NumberFormat('es-AR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(amount));
+}
+
 export function percent(value: string | number): string {
   return `${new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 }).format(
     Number(value),
@@ -77,6 +91,11 @@ export function shiftMonth(month: string, by: number): string {
 export function today(): string {
   return monthKey(new Date()) + `-${String(new Date().getDate()).padStart(2, '0')}`;
 }
+
+export const CURRENCY_OPTIONS: { value: Currency; label: string }[] = [
+  { value: 'ARS', label: 'Pesos (ARS)' },
+  { value: 'USD', label: 'Dólares (USD)' },
+];
 
 export const BUDGET_STATE_LABEL: Record<BudgetState, string> = {
   on_pace: 'en ritmo',

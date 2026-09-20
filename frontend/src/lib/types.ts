@@ -54,6 +54,18 @@ export interface InstallmentPurchase {
   cuotas?: Transaction[];
 }
 
+export interface RecurringExpense {
+  id: string;
+  description: string;
+  category_id: string;
+  currency: Currency;
+  reference_amount: string;
+  expected_day: number;
+  is_fixed: boolean;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface BudgetProgress {
   id: string;
   category_id: string;

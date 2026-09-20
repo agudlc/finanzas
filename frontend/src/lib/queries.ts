@@ -24,6 +24,7 @@ import type {
   InstallmentPurchase,
   MonthlySpending,
   MonthlySummary,
+  RecurringExpense,
   Settings,
   Transaction,
 } from '@/lib/types';
@@ -37,6 +38,7 @@ export const keys = {
   summary: (month?: string) => ['summary', month ?? 'current'] as const,
   spending: (month?: string) => ['spending', month ?? 'current'] as const,
   purchases: ['installment-purchases'] as const,
+  recurring: ['recurring-expenses'] as const,
   profiles: ['import-profiles'] as const,
   rules: ['categorization-rules'] as const,
   imports: ['imports'] as const,
@@ -79,6 +81,7 @@ const CATEGORIES = [[...keys.categories], ...MONEY];
 const PROFILES = [[...keys.profiles]];
 const RULES = [[...keys.rules]];
 const SETTINGS = [[...keys.settings], ...MONEY];
+const RECURRING = [[...keys.recurring]];
 
 export function useCategories() {
   return useQuery({
@@ -172,6 +175,36 @@ export function useCreatePurchase() {
 export function useDeletePurchase() {
   return useWrite((id: string) =>
     api.remove(`/installment-purchases/${id}`),
+  );
+}
+
+export function useRecurringExpenses() {
+  return useQuery({
+    queryKey: keys.recurring,
+    queryFn: () => api.get<RecurringExpense[]>('/recurring-expenses/'),
+  });
+}
+
+export function useCreateRecurringExpense() {
+  return useWrite(
+    (body: Record<string, unknown>) =>
+      api.post<RecurringExpense>('/recurring-expenses/', body),
+    RECURRING,
+  );
+}
+
+export function useUpdateRecurringExpense() {
+  return useWrite(
+    ({ id, changes }: { id: string; changes: Record<string, unknown> }) =>
+      api.patch<RecurringExpense>(`/recurring-expenses/${id}`, changes),
+    RECURRING,
+  );
+}
+
+export function useDeleteRecurringExpense() {
+  return useWrite(
+    (id: string) => api.remove(`/recurring-expenses/${id}`),
+    RECURRING,
   );
 }
 

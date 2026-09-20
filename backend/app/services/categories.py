@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Category, Transaction
+from app.models import Category, RecurringExpense, Transaction
 from app.schemas.category import CategoryCreate, CategoryUpdate
 from app.services.errors import Conflict, NotFound
 
@@ -29,6 +29,15 @@ async def count_transactions_in(db: AsyncSession, category_id: uuid.UUID) -> int
     return result.scalar_one()
 
 
+async def count_recurring_expenses_in(db: AsyncSession, category_id: uuid.UUID) -> int:
+    result = await db.execute(
+        select(func.count())
+        .select_from(RecurringExpense)
+        .where(RecurringExpense.category_id == category_id)
+    )
+    return result.scalar_one()
+
+
 async def create_category(db: AsyncSession, data: CategoryCreate) -> Category:
     category = Category(**data.model_dump())
     db.add(category)
@@ -49,6 +58,12 @@ async def update_category(
             raise Conflict(
                 "a Category that already classifies Transactions cannot change type"
             )
+        # A Recurring Expense may only use an expense Category, and it holds
+        # the Category rather than a type, so the type cannot move under it.
+        if await count_recurring_expenses_in(db, category_id):
+            raise Conflict(
+                "a Category a Recurring Expense uses cannot change type"
+            )
 
     for field, value in changed.items():
         setattr(category, field, value)
@@ -62,6 +77,10 @@ async def delete_category(db: AsyncSession, category_id: uuid.UUID) -> None:
     if await count_transactions_in(db, category_id):
         raise Conflict(
             "a Category that still classifies Transactions cannot be deleted"
+        )
+    if await count_recurring_expenses_in(db, category_id):
+        raise Conflict(
+            "a Category a Recurring Expense still uses cannot be deleted"
         )
     await db.delete(category)
     await db.commit()

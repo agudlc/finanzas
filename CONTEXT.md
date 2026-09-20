@@ -19,7 +19,7 @@ A Transaction where money arrives.
 _Avoid_: Earning, inflow, source
 
 **Category**:
-A label that classifies Transactions. It has a type: an expense Category can only classify Expenses, and an income Category only Incomes.
+A label that classifies Transactions. It has a type: an expense Category can only classify Expenses, and an income Category only Incomes. Every Transaction has exactly one Category from the moment it is recorded; there is no such thing as an uncategorized Transaction, including during an Import.
 _Avoid_: Tag, source (for Income)
 
 **Default Category**:
@@ -27,7 +27,7 @@ A Category the app ships with (e.g. Supermercado, Delivery, Alquiler; Sueldo, Re
 _Avoid_: System category, built-in
 
 **Categorization Rule**:
-A mapping "description contains X → Category Y" that assigns Categories to imported Transactions. Rules are learned from the user's manual choices and from accepted Suggestions.
+A mapping "description contains X → Category Y" that assigns Categories to imported Transactions. Rules are learned from the user's manual choices and from accepted Suggestions. A rule only applies to Transactions imported after it exists; it never recategorizes Transactions already recorded.
 _Avoid_: Mapping, filter, auto-tag
 
 **Import**:
@@ -77,11 +77,11 @@ Buying or selling dollars or crypto is not recorded: without accounts it is neit
 ### Planning
 
 **Budget**:
-A spending limit for one expense Category in one month. Going over it is shown loudly, never blocked. Next month's Budgets come from the month-end Review as Suggestions (inflation and actual spending in mind), or are copied unchanged when no Review exists.
+A spending limit for one expense Category in one month. Going over it is shown loudly, never blocked. A new month starts from a copy of the last month's Budgets, so it is never without them; the month-end Review then proposes adjustments to those amounts as Suggestions, with inflation and actual spending in mind.
 _Avoid_: Limit, cap
 
 **Pace**:
-The share of a Budget that "should" be spent by a given day of the month. Budget progress is judged against Pace, and warnings escalate at 80% and 100% of the Budget; crossing 100% triggers a Review.
+The share of a Budget that "should" be spent by a given day of the month. Budget progress is judged against Pace, and warnings escalate at 80% and 100% of the Budget; crossing 100% triggers a Review, at most once per Budget.
 _Avoid_: Burn rate, expected spend
 
 **Goal**:
@@ -93,25 +93,29 @@ Money the user sets aside toward one Goal on a date, in the Goal's currency. A G
 _Avoid_: Deposit, current amount, savings expense
 
 **Recurring Expense**:
-A template for an Expense expected every month (Category, expected day, reference amount). It never creates Transactions directly; each month it produces a Suggestion. The suggested amount is the last amount actually paid, unless the template has an Adjustment Rule.
+A template for an Expense expected every month (Category, expected day, reference amount). It never creates Transactions directly; each month it produces a Suggestion. A Transaction created by accepting one of those Suggestions stays linked to the template, and the most recent such Transaction is what "the last amount actually paid" means; before there is one, the reference amount stands in. The suggested amount is that last amount, unless the template has an Adjustment Rule.
 _Avoid_: Fixed expense (that is a flag on a Transaction), subscription
 
 **Adjustment Rule**:
-An optional rule on a Recurring Expense saying how its amount changes over time: every N months by a fixed percentage or by an index (e.g. IPC), as in a rent contract.
+An optional rule on a Recurring Expense saying how its amount changes over time: every N months by a fixed percentage or by an Inflation Index, as in a rent contract. When an adjustment is due but the index for the month has not been published yet, the Suggestion still appears on time with the unadjusted amount and says the adjustment is pending.
 _Avoid_: Indexation, update rule
+
+**Inflation Index**:
+How much prices moved in one month, as a percentage, published under a name (e.g. IPC) and used by Adjustment Rules. A month's value either comes from the official series or is entered by hand; a hand-entered value wins and is never overwritten by a later fetch, the same way a confirmed Exchange Rate never moves.
+_Avoid_: Inflation rate, IPC (as a model name), CPI
 
 ### Agent
 
 **Review**:
-One run of the agent over the user's data. It starts either from an event (import finished, Budget threshold crossed, month end) or manually by the user.
-_Avoid_: Job, analysis, scan
+One run that produces Suggestions and Insights, with a trigger saying what caused it: an event (an Import finished, a Budget crossed a threshold, the month ended, a month's Recurring Expenses came due) or the user asking. Not every Review runs the agent — some are plain arithmetic over Recurring Expenses and Budgets. Every Suggestion and every Insight belongs to exactly one Review.
+_Avoid_: Job, analysis, scan, agent run
 
 **Insight**:
-A read-only observation the agent produces during a Review. It changes no data. The user can dismiss it; it leaves the Inbox after the next month-end Review but stays as history later Reviews can read.
+A read-only observation the agent produces during a Review. It changes no data. It belongs to the month it was produced in and only waits in the Inbox during that month, whether or not the user dismisses it; afterwards it stays as history that later Reviews can read.
 _Avoid_: Tip, alert, notification
 
 **Suggestion**:
-A change the agent proposes (for example recategorizing a Transaction). It is pending until the user accepts it (possibly after editing), rejects it (optionally with a reason), or it expires. Rejections are remembered and inform later Reviews.
+A change a Review proposes (for example recategorizing a Transaction). Every Suggestion is one of a fixed set of kinds, each describing one shape of change the app knows how to apply; anything that does not fit a kind is an Insight instead. It is pending until the user accepts it (possibly after editing any part of what it proposes), rejects it (optionally with a reason), or it expires. Every Suggestion is about one month and stops being offered once acting on it no longer makes sense, so rejecting one means "not this month" rather than "never": the same proposal can return next month. Rejections are remembered and inform later Reviews.
 _Avoid_: Recommendation, action
 
 **Inbox**:

@@ -4,5 +4,7 @@ The ambient agent runs Reviews on its own (on events, month end, or manual trigg
 
 ## Consequences
 
-- Recurring expenses and next month's budgets reach the data only through accepted Suggestions.
+- Recurring expenses and adjustments to next month's budgets reach the data only through accepted Suggestions. (The plain copy of last month's budgets into a new month is not the agent's doing and stays automatic.)
 - Anything the agent would do "automatically" needs an Inbox entry and a user action, which is slower but auditable.
+- Suggestion kinds are a closed list, each with a typed payload the app knows how to apply; the model is only offered those kinds. Anything else it wants to say is an Insight.
+- Accepting a Suggestion (possibly edited) goes through the same services the API routes use, so the agent has no write path the user lacks and skips no validation.

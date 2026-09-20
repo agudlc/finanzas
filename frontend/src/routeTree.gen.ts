@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TransaccionesRouteImport } from './routes/transacciones'
 import { Route as PresupuestosRouteImport } from './routes/presupuestos'
+import { Route as BandejaRouteImport } from './routes/bandeja'
 import { Route as AjustesRouteImport } from './routes/ajustes'
 import { Route as IndexRouteImport } from './routes/index'
 
@@ -22,6 +23,11 @@ const TransaccionesRoute = TransaccionesRouteImport.update({
 const PresupuestosRoute = PresupuestosRouteImport.update({
   id: '/presupuestos',
   path: '/presupuestos',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BandejaRoute = BandejaRouteImport.update({
+  id: '/bandeja',
+  path: '/bandeja',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AjustesRoute = AjustesRouteImport.update({
@@ -38,12 +44,14 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/ajustes': typeof AjustesRoute
+  '/bandeja': typeof BandejaRoute
   '/presupuestos': typeof PresupuestosRoute
   '/transacciones': typeof TransaccionesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/ajustes': typeof AjustesRoute
+  '/bandeja': typeof BandejaRoute
   '/presupuestos': typeof PresupuestosRoute
   '/transacciones': typeof TransaccionesRoute
 }
@@ -51,20 +59,28 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/ajustes': typeof AjustesRoute
+  '/bandeja': typeof BandejaRoute
   '/presupuestos': typeof PresupuestosRoute
   '/transacciones': typeof TransaccionesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/ajustes' | '/presupuestos' | '/transacciones'
+  fullPaths: '/' | '/ajustes' | '/bandeja' | '/presupuestos' | '/transacciones'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/ajustes' | '/presupuestos' | '/transacciones'
-  id: '__root__' | '/' | '/ajustes' | '/presupuestos' | '/transacciones'
+  to: '/' | '/ajustes' | '/bandeja' | '/presupuestos' | '/transacciones'
+  id:
+    | '__root__'
+    | '/'
+    | '/ajustes'
+    | '/bandeja'
+    | '/presupuestos'
+    | '/transacciones'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AjustesRoute: typeof AjustesRoute
+  BandejaRoute: typeof BandejaRoute
   PresupuestosRoute: typeof PresupuestosRoute
   TransaccionesRoute: typeof TransaccionesRoute
 }
@@ -83,6 +99,13 @@ declare module '@tanstack/react-router' {
       path: '/presupuestos'
       fullPath: '/presupuestos'
       preLoaderRoute: typeof PresupuestosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bandeja': {
+      id: '/bandeja'
+      path: '/bandeja'
+      fullPath: '/bandeja'
+      preLoaderRoute: typeof BandejaRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/ajustes': {
@@ -105,6 +128,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AjustesRoute: AjustesRoute,
+  BandejaRoute: BandejaRoute,
   PresupuestosRoute: PresupuestosRoute,
   TransaccionesRoute: TransaccionesRoute,
 }

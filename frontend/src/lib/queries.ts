@@ -19,12 +19,14 @@ import type {
   Category,
   FileColumns,
   ImportPreview,
+  Inbox,
   ImportProfile,
   ImportRecord,
   InstallmentPurchase,
   MonthlySpending,
   MonthlySummary,
   RecurringExpense,
+  Review,
   Settings,
   Transaction,
 } from '@/lib/types';
@@ -42,6 +44,7 @@ export const keys = {
   profiles: ['import-profiles'] as const,
   rules: ['categorization-rules'] as const,
   imports: ['imports'] as const,
+  inbox: ['inbox'] as const,
 };
 
 /** Anything that changes money makes all of these stale. */
@@ -82,6 +85,7 @@ const PROFILES = [[...keys.profiles]];
 const RULES = [[...keys.rules]];
 const SETTINGS = [[...keys.settings], ...MONEY];
 const RECURRING = [[...keys.recurring]];
+const INBOX = [[...keys.inbox]];
 
 export function useCategories() {
   return useQuery({
@@ -335,4 +339,25 @@ export function useConfirmImport() {
 
 export function useUndoImport() {
   return useWrite((id: string) => api.remove(`/imports/${id}`));
+}
+
+/**
+ * The Inbox, polled.
+ *
+ * A Review runs in the worker, so nothing tells the screen when it finishes:
+ * while one is queued or running the poll tightens, and relaxes once the Inbox
+ * is only waiting for the user.
+ */
+export function useInbox() {
+  return useQuery({
+    queryKey: keys.inbox,
+    queryFn: () => api.get<Inbox>('/inbox/'),
+    refetchInterval: (query) =>
+      (query.state.data?.reviews.length ?? 0) > 0 ? 1500 : 30000,
+  });
+}
+
+/** "Revisar ahora": the Review comes back queued, and the poll picks it up. */
+export function useRunReview() {
+  return useWrite(() => api.post<Review>('/reviews/', {}), INBOX);
 }

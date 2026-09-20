@@ -9,8 +9,10 @@ from app.api.routes.imports import (
     router as imports_router,
     rules_router as categorization_rules_router,
 )
+from app.api.routes.inbox import router as inbox_router
 from app.api.routes.installments import router as installments_router
 from app.api.routes.recurring_expenses import router as recurring_expenses_router
+from app.api.routes.reviews import router as reviews_router
 from app.api.routes.summary import router as summary_router
 from app.api.routes.settings import router as settings_router
 from app.api.routes.transactions import router as transactions_router
@@ -47,6 +49,8 @@ app.include_router(summary_router, prefix="/api/v1")
 app.include_router(import_profiles_router, prefix="/api/v1")
 app.include_router(categorization_rules_router, prefix="/api/v1")
 app.include_router(imports_router, prefix="/api/v1")
+app.include_router(reviews_router, prefix="/api/v1")
+app.include_router(inbox_router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -68,6 +68,12 @@ class ReviewTrigger(str, enum.Enum):
     manual = "manual"
 
 
+# The triggers that come due on their own, once each per month. The others are
+# the user asking or an event that can happen any number of times in a month,
+# so only these are the ones a month can be missing.
+SCHEDULED_TRIGGERS = (ReviewTrigger.recurring_monthly,)
+
+
 class ReviewStatus(str, enum.Enum):
     """How far a Review got. A failed one is never retried."""
 

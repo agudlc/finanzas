@@ -17,6 +17,9 @@ from app.models.enums import (
 class ReviewResponse(BaseModel):
     id: uuid.UUID
     trigger: ReviewTrigger
+    # The month the run is about, stored as its first day. A scheduled Review
+    # happens once per month; a manual one is about the month it was asked in.
+    month: Date
     status: ReviewStatus
     used_agent: bool
     error: str | None

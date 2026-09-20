@@ -88,7 +88,7 @@ class EagerReviewQueue:
         self._held = True
 
     def break_with(self, message: str) -> None:
-        async def explode(db, review_id, clock):
+        async def explode(db, review, clock):
             raise RuntimeError(message)
 
         self._producers = {trigger: [explode] for trigger in ReviewTrigger}

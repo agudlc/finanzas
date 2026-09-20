@@ -39,8 +39,11 @@ services:
       redis:
         condition: service_healthy
 
-  # The other half of the queue: it runs the Reviews the API hands over.
-  # Same image and same database as the backend; only the command differs.
+  # The other half of the queue: it runs the Reviews the API hands over, and
+  # starts the ones nobody asks for, on the 1st of each month. Same image and
+  # same database as the backend; only the command differs. What time it is in
+  # Buenos Aires is the worker's business, not the container's: see
+  # WorkerSettings.timezone.
   worker:
     build:
       context: ./backend

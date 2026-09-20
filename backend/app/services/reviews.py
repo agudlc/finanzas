@@ -7,22 +7,32 @@ pick it up — so a Redis that loses the wakeup loses nothing but the wakeup.
 A run that raises leaves the Review failed with its error, and stays failed:
 there are no retries, because a hidden bug in someone's rent is worse than a
 visible one.
+
+Some Reviews nobody asks for: they are due once a month and the worker's cron
+starts them. The 1st is when they should happen, not the only moment they can,
+so opening the Inbox catches up on any the worker missed.
 """
 
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date as Date, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
 from app.models import Review
-from app.models.enums import ReviewStatus, ReviewTrigger
+from app.models.enums import SCHEDULED_TRIGGERS, ReviewStatus, ReviewTrigger
+from app.months import month_of
+from app.queue import ReviewQueue
 from app.services.errors import NotFound
 from app.services.producers import propose_recurring_expenses
 
-Producer = Callable[[AsyncSession, uuid.UUID, Clock], Awaitable[None]]
+# A producer is given the Review it is producing for: the month to propose for
+# is the Review's, not today's, so a run that starts after midnight still does
+# the month it was created for.
+Producer = Callable[[AsyncSession, Review, Clock], Awaitable[None]]
 
 # What each trigger runs. A manual Review runs everything the user could be
 # waiting for, and the dedupe keys keep that from stepping on the scheduled runs.
@@ -48,12 +58,61 @@ async def get_review(db: AsyncSession, review_id: uuid.UUID) -> Review:
     return review
 
 
-async def create_review(db: AsyncSession, trigger: ReviewTrigger) -> Review:
-    review = Review(trigger=trigger)
+async def create_review(
+    db: AsyncSession, trigger: ReviewTrigger, month: Date
+) -> Review:
+    review = Review(trigger=trigger, month=month_of(month))
     db.add(review)
     await db.commit()
     await db.refresh(review)
     return review
+
+
+async def ensure_scheduled_reviews(
+    db: AsyncSession, clock: Clock, queue: ReviewQueue
+) -> None:
+    """
+    Create and queue this month's scheduled Reviews, if they are not there.
+
+    They are due on the 1st, so any moment after that is late rather than too
+    early.
+
+    The cron calls this on the 1st and the Inbox calls it on every read, which
+    is what makes the schedule survive a worker that was down: the cost of a
+    missed run is a slower first read, not a month without its proposals.
+    """
+    month = month_of(clock.today())
+    already = await _scheduled_triggers_in(db, month)
+    for trigger in SCHEDULED_TRIGGERS:
+        if trigger in already:
+            continue
+        review = await _create_scheduled(db, trigger, month)
+        if review is not None:
+            await queue.enqueue(review.id)
+
+
+async def _scheduled_triggers_in(
+    db: AsyncSession, month: Date
+) -> set[ReviewTrigger]:
+    result = await db.execute(
+        select(Review.trigger)
+        .where(Review.month == month)
+        .where(Review.trigger.in_(SCHEDULED_TRIGGERS))
+    )
+    return set(result.scalars().all())
+
+
+async def _create_scheduled(
+    db: AsyncSession, trigger: ReviewTrigger, month: Date
+) -> Review | None:
+    """The Review, or None when someone else got there first."""
+    try:
+        return await create_review(db, trigger, month)
+    except IntegrityError:
+        # The unique index caught a cron and an Inbox read deciding at the same
+        # moment that this month was missing its Review.
+        await db.rollback()
+        return None
 
 
 async def list_reviews(db: AsyncSession, limit: int = 20) -> list[Review]:
@@ -90,7 +149,7 @@ async def run_review(
 
     try:
         for produce in producers[review.trigger]:
-            await produce(db, review.id, clock)
+            await produce(db, review, clock)
         await db.commit()
     except Exception as error:
         # Nothing half-proposed survives a failed run.

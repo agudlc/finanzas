@@ -189,6 +189,8 @@ export interface FileColumns {
 export interface Review {
   id: string;
   trigger: ReviewTrigger;
+  /** The month the run is about, as its first day. */
+  month: string;
   status: ReviewStatus;
   used_agent: boolean;
   error: string | null;

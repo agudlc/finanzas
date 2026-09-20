@@ -20,9 +20,10 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, date as Date, datetime
 
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clock import Clock
 from app.models import Suggestion
 from app.models.enums import SuggestionKind, SuggestionStatus, TransactionType
 from app.months import last_day_of_month, month_of
@@ -80,6 +81,24 @@ async def _already_proposed(
     return result.scalars().first() is not None
 
 
+async def expire_overdue_suggestions(db: AsyncSession, clock: Clock) -> None:
+    """
+    Stop offering what the month has taken care of.
+
+    Expiry is lazy on purpose: it happens when the Inbox is read, so there is
+    no sweeper job to be down. Nothing depends on the sweep having run, though
+    — accepting checks the date too — so the worst a long silence costs is rows
+    that say pending a little longer than they mean it.
+    """
+    await db.execute(
+        update(Suggestion)
+        .where(Suggestion.status == SuggestionStatus.pending)
+        .where(Suggestion.expires_on < clock.today())
+        .values(status=SuggestionStatus.expired, resolved_at=datetime.now(UTC))
+    )
+    await db.commit()
+
+
 async def pending_suggestions(db: AsyncSession) -> list[Suggestion]:
     """What is waiting, newest first."""
     result = await db.execute(
@@ -134,10 +153,11 @@ async def accept(
     suggestion_id: uuid.UUID,
     edits: dict | None,
     estimator: RateEstimator,
+    clock: Clock,
 ) -> Suggestion:
     """Apply what was proposed, with the user's edits merged over it."""
     suggestion = await get_suggestion(db, suggestion_id)
-    _require_pending(suggestion)
+    await _require_open(db, suggestion, clock)
     suggestion.result_id = await APPLIERS[suggestion.kind](
         db, {**suggestion.payload, **(edits or {})}, estimator
     )
@@ -145,7 +165,7 @@ async def accept(
 
 
 async def reject(
-    db: AsyncSession, suggestion_id: uuid.UUID, reason: str | None
+    db: AsyncSession, suggestion_id: uuid.UUID, reason: str | None, clock: Clock
 ) -> Suggestion:
     """
     "Not this month", optionally with a reason.
@@ -154,13 +174,25 @@ async def reject(
     being proposed again; next month asks a different question.
     """
     suggestion = await get_suggestion(db, suggestion_id)
-    _require_pending(suggestion)
+    await _require_open(db, suggestion, clock)
     suggestion.rejection_reason = reason
     return await _resolve(db, suggestion, SuggestionStatus.rejected)
 
 
-def _require_pending(suggestion: Suggestion) -> None:
-    """Only a Suggestion still waiting can be acted on, and only once."""
+async def _require_open(
+    db: AsyncSession, suggestion: Suggestion, clock: Clock
+) -> None:
+    """
+    Only a Suggestion still waiting can be acted on, and only once.
+
+    A pending one whose month is over is expired here and now rather than
+    applied: the Inbox read that would have swept it may not have happened, and
+    a proposal for a month that is over is no longer a proposal.
+    """
+    if suggestion.status is SuggestionStatus.pending and (
+        suggestion.expires_on < clock.today()
+    ):
+        await _resolve(db, suggestion, SuggestionStatus.expired)
     if suggestion.status is not SuggestionStatus.pending:
         raise Conflict(
             f"this Suggestion is already {suggestion.status.value}, "

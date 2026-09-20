@@ -10,6 +10,7 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clock import Clock, get_clock
 from app.database import get_db
 from app.schemas.review import (
     SuggestionAccept,
@@ -28,9 +29,12 @@ async def accept_suggestion(
     body: SuggestionAccept | None = None,
     db: AsyncSession = Depends(get_db),
     estimator: RateEstimator = Depends(get_rate_estimator),
+    clock: Clock = Depends(get_clock),
 ):
     """Record what was proposed, as it stands or with the edits in the body."""
-    return await accept(db, suggestion_id, body.payload if body else None, estimator)
+    return await accept(
+        db, suggestion_id, body.payload if body else None, estimator, clock
+    )
 
 
 @router.post("/{suggestion_id}/reject", response_model=SuggestionResponse)
@@ -38,6 +42,7 @@ async def reject_suggestion(
     suggestion_id: uuid.UUID,
     body: SuggestionReject | None = None,
     db: AsyncSession = Depends(get_db),
+    clock: Clock = Depends(get_clock),
 ):
     """"No este mes": nothing is recorded, and the reason is kept if given."""
-    return await reject(db, suggestion_id, body.reason if body else None)
+    return await reject(db, suggestion_id, body.reason if body else None, clock)

@@ -3,8 +3,8 @@ The one seam these tests drive is the HTTP API.
 
 Every test talks to the FastAPI app over httpx against a real Postgres database
 migrated to head, and asserts only on responses. The only fakes are at the
-edges, through dependency overrides: a fixed clock and a fixed source of dollar
-rates.
+edges, through dependency overrides: a fixed clock, a fixed source of dollar
+rates, and a queue that runs Reviews in-process instead of through Redis.
 """
 
 import asyncio
@@ -24,8 +24,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.clock import Clock, get_clock
 from app.database import get_db
 from app.main import app
-from app.models.enums import RateType
+from app.models.enums import RateType, ReviewTrigger
+from app.queue import get_review_queue
 from app.rates import RateUnavailable, get_rate_source
+from app.services.reviews import PRODUCERS, run_review
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
@@ -64,6 +66,38 @@ class FixedRateSource:
         if rate_type not in self.rates:
             raise RateUnavailable(f"{rate_type.value} rates are not published")
         return self.rates[rate_type]
+
+
+class EagerReviewQueue:
+    """
+    The worker, run in-process: no Redis, and the Review is done on return.
+
+    It runs exactly what the ARQ job runs, so the only thing tests give up by
+    using it is having to wait. `hold` stands in for a worker that is down, and
+    `break_with` for a producer that raises.
+    """
+
+    def __init__(self, sessionmaker, clock: Clock):
+        self._sessionmaker = sessionmaker
+        self._clock = clock
+        self._producers = PRODUCERS
+        self._held = False
+
+    def hold(self) -> None:
+        """Leave Reviews queued, as a worker that never wakes up would."""
+        self._held = True
+
+    def break_with(self, message: str) -> None:
+        async def explode(db, review_id, clock):
+            raise RuntimeError(message)
+
+        self._producers = {trigger: [explode] for trigger in ReviewTrigger}
+
+    async def enqueue(self, review_id) -> None:
+        if self._held:
+            return
+        async with self._sessionmaker() as session:
+            await run_review(session, review_id, self._clock, self._producers)
 
 
 def _dsn(url: str) -> str:
@@ -166,7 +200,14 @@ def rate_source() -> FixedRateSource:
 
 
 @pytest.fixture
-async def client(clean_database, engine, clock, rate_source):
+async def queue(engine, clock) -> EagerReviewQueue:
+    return EagerReviewQueue(
+        async_sessionmaker(engine, expire_on_commit=False), clock
+    )
+
+
+@pytest.fixture
+async def client(clean_database, engine, clock, rate_source, queue):
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 
     async def override_get_db():
@@ -176,6 +217,7 @@ async def client(clean_database, engine, clock, rate_source):
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_clock] = lambda: clock
     app.dependency_overrides[get_rate_source] = lambda: rate_source
+    app.dependency_overrides[get_review_queue] = lambda: queue
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test/api/v1") as http:

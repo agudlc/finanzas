@@ -58,3 +58,40 @@ class BudgetState(str, enum.Enum):
     ahead_of_pace = "ahead_of_pace"
     warning = "warning"
     over = "over"
+
+
+class ReviewTrigger(str, enum.Enum):
+    """What caused a Review to run."""
+
+    recurring_monthly = "recurring_monthly"
+    month_end = "month_end"
+    manual = "manual"
+
+
+class ReviewStatus(str, enum.Enum):
+    """How far a Review got. A failed one is never retried."""
+
+    queued = "queued"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
+class SuggestionKind(str, enum.Enum):
+    """
+    The shapes of change the app knows how to apply.
+
+    Closed on purpose (ADR-0002): anything that does not fit a kind is an
+    Insight instead, so nothing can be proposed that the app cannot apply.
+    """
+
+    add_transaction = "add_transaction"
+
+
+class SuggestionStatus(str, enum.Enum):
+    """Where a Suggestion stands with the user."""
+
+    pending = "pending"
+    accepted = "accepted"
+    rejected = "rejected"
+    expired = "expired"

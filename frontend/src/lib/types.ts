@@ -11,6 +11,10 @@ export type SignConvention =
   | 'positive_is_expense'
   | 'debit_credit_columns';
 export type RowStatus = 'new' | 'duplicate' | 'ignored' | 'needs_category';
+export type ReviewTrigger = 'recurring_monthly' | 'month_end' | 'manual';
+export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed';
+export type SuggestionKind = 'add_transaction';
+export type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
 
 export interface Category {
   id: string;
@@ -178,4 +182,46 @@ export interface ImportRecord {
 export interface FileColumns {
   filename: string;
   columns: string[];
+}
+
+export interface Review {
+  id: string;
+  trigger: ReviewTrigger;
+  status: ReviewStatus;
+  used_agent: boolean;
+  error: string | null;
+  note: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** What an `add_transaction` Suggestion would record. */
+export interface AddTransactionPayload {
+  description: string;
+  category_id: string;
+  currency: Currency;
+  amount: string;
+  date: string;
+  is_fixed: boolean;
+  recurring_expense_id: string;
+}
+
+export interface Suggestion {
+  id: string;
+  review_id: string;
+  kind: SuggestionKind;
+  month: string;
+  payload: AddTransactionPayload;
+  rationale: string;
+  status: SuggestionStatus;
+  expires_on: string;
+  created_at: string;
+}
+
+export interface Inbox {
+  suggestions: Suggestion[];
+  pending_count: number;
+  /** The Reviews queued or running right now. */
+  reviews: Review[];
 }

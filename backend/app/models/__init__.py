@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -25,8 +26,12 @@ from app.models.enums import (
     Currency,
     NumberFormat,
     RateType,
+    ReviewStatus,
+    ReviewTrigger,
     RuleOrigin,
     SignConvention,
+    SuggestionKind,
+    SuggestionStatus,
     TransactionType,
 )
 
@@ -278,3 +283,80 @@ class CategorizationRule(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class Review(Base):
+    """
+    One run that produces Suggestions, with the trigger saying what caused it.
+
+    Every Suggestion belongs to one (ADR-0003), including the deterministic
+    ones, so "what was proposed, when and why" has a single history. A Review
+    that fails keeps its error and is never retried, so bugs stay visible.
+    """
+
+    __tablename__ = "reviews"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    trigger: Mapped[ReviewTrigger] = mapped_column(Enum(ReviewTrigger))
+    status: Mapped[ReviewStatus] = mapped_column(
+        Enum(ReviewStatus), default=ReviewStatus.queued
+    )
+    # Whether the run called the model. Deterministic and agent work never
+    # share a Review, so the trigger alone answers this.
+    used_agent: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(String(250), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def __repr__(self):
+        return f"<Review {self.trigger.value} {self.status.value}>"
+
+
+class Suggestion(Base):
+    """
+    A change a Review proposes, waiting in the Inbox.
+
+    The payload holds the proposed change in the shape its kind defines; the
+    dedupe key says what it is about ("this template, this month"), so running
+    the Reviews again proposes nothing twice. Expiry is a date because a
+    Suggestion stops making sense at the end of a month, not at an instant.
+    """
+
+    __tablename__ = "suggestions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    review_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("reviews.id"))
+    kind: Mapped[SuggestionKind] = mapped_column(Enum(SuggestionKind))
+    # The month the Suggestion is about, stored as its first day.
+    month: Mapped[Date] = mapped_column(DateColumn)
+    dedupe_key: Mapped[str] = mapped_column(String(250))
+    payload: Mapped[dict] = mapped_column(JSONB)
+    rationale: Mapped[str] = mapped_column(Text)
+
+    status: Mapped[SuggestionStatus] = mapped_column(
+        Enum(SuggestionStatus), default=SuggestionStatus.pending
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    # What accepting it created, e.g. the Transaction. Kept without a foreign
+    # key because each kind creates something of its own.
+    result_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+
+    expires_on: Mapped[Date] = mapped_column(DateColumn)
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self):
+        return f"<Suggestion {self.kind.value} {self.dedupe_key}>"

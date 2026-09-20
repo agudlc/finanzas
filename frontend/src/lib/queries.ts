@@ -14,6 +14,7 @@ import {
 
 import { api, query } from '@/lib/api';
 import type {
+  AddTransactionPayload,
   BudgetProgress,
   CategorizationRule,
   Category,
@@ -28,6 +29,7 @@ import type {
   RecurringExpense,
   Review,
   Settings,
+  Suggestion,
   Transaction,
 } from '@/lib/types';
 
@@ -360,4 +362,26 @@ export function useInbox() {
 /** "Revisar ahora": the Review comes back queued, and the poll picks it up. */
 export function useRunReview() {
   return useWrite(() => api.post<Review>('/reviews/', {}), INBOX);
+}
+
+/**
+ * Accepting a suggestion, as proposed or with the fields the user changed.
+ *
+ * It records a Transaction, so everything money makes stale, not just the Inbox.
+ */
+export function useAcceptSuggestion() {
+  return useWrite(
+    ({ id, payload }: { id: string; payload?: Partial<AddTransactionPayload> }) =>
+      api.post<Suggestion>(`/suggestions/${id}/accept`, { payload }),
+    [...INBOX, ...MONEY],
+  );
+}
+
+/** "No este mes": nothing is recorded, so only the Inbox changes. */
+export function useRejectSuggestion() {
+  return useWrite(
+    ({ id, reason }: { id: string; reason?: string }) =>
+      api.post<Suggestion>(`/suggestions/${id}/reject`, { reason: reason ?? null }),
+    INBOX,
+  );
 }

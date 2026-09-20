@@ -57,6 +57,7 @@ function Bandeja() {
               <SuggestionCard
                 key={suggestion.id}
                 suggestion={suggestion}
+                categories={categories.data ?? []}
                 category={byId.get(suggestion.payload.category_id)}
               />
             ))}

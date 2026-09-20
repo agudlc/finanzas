@@ -1,6 +1,6 @@
 """Recurring Expenses: the templates, before anything suggests them."""
 
-from tests.api import create_category, default_category
+from tests.api import create_category, default_category, transaction_body
 
 UNKNOWN = "00000000-0000-0000-0000-000000000000"
 
@@ -222,3 +222,37 @@ async def test_a_recurring_expense_that_does_not_exist_returns_404(client):
         )
     ).status_code == 404
     assert (await client.delete(f"/recurring-expenses/{UNKNOWN}")).status_code == 404
+
+
+async def test_a_transaction_cannot_come_from_a_recurring_expense_that_is_gone(
+    client,
+):
+    """The link is a Recurring Expense's id, and it has to be one."""
+    supermercado = await default_category(client, "Supermercado", "expense")
+
+    response = await client.post(
+        "/transactions/",
+        json=transaction_body(
+            category_id=supermercado["id"], recurring_expense_id=UNKNOWN
+        ),
+    )
+
+    assert response.status_code == 404
+    assert (await client.get("/transactions/")).json() == []
+
+
+async def test_only_an_expense_can_come_from_a_recurring_expense(client):
+    template = await create_recurring(client)
+    sueldo = await default_category(client, "Sueldo", "income")
+
+    response = await client.post(
+        "/transactions/",
+        json=transaction_body(
+            type="income",
+            category_id=sueldo["id"],
+            recurring_expense_id=template["id"],
+        ),
+    )
+
+    assert response.status_code == 422
+    assert "only an Expense" in response.json()["detail"]

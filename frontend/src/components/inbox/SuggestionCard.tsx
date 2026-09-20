@@ -1,21 +1,46 @@
+import { useState } from 'react';
+
 import { Badge } from '@/components/ui/badge';
-import { longDay, money } from '@/lib/format';
-import type { Category, Suggestion } from '@/lib/types';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { ErrorText, Field, SelectField } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import {
+  CURRENCY_OPTIONS,
+  decimal,
+  longDay,
+  money,
+  typedAmount,
+} from '@/lib/format';
+import { useAcceptSuggestion, useRejectSuggestion } from '@/lib/queries';
+import type { Category, Currency, Suggestion } from '@/lib/types';
 
 /**
- * One proposal, said plainly: what it would record, and why.
+ * One proposal, said plainly: what it would record, why, and what to do about it.
  *
  * The user decides from this card alone, so it never hides behind "gasto
- * recurrente de marzo" — the amount, the day and the category are all here.
+ * recurrente de marzo" — the amount, the day and the category are all here, and
+ * so is the chance to change any of them before saying yes. Rejecting means "no
+ * este mes", which is why the reason is optional: most months there isn't one.
  */
 export default function SuggestionCard({
   suggestion,
+  categories = [],
   category,
 }: {
   suggestion: Suggestion;
+  categories?: Category[];
   category?: Category;
 }) {
+  // Which question the card is asking, if any: nothing, the edit form, or the
+  // reason for saying no.
+  const [open, setOpen] = useState<'editing' | 'rejecting' | null>(null);
+
+  const accept = useAcceptSuggestion();
+  const rejection = useRejectSuggestion();
+
   const { description, amount, currency, date, is_fixed } = suggestion.payload;
+  const working = accept.isPending || rejection.isPending;
 
   return (
     <article className="flex flex-col gap-3 rounded-xl bg-paper-2 p-5">
@@ -32,6 +57,215 @@ export default function SuggestionCard({
       </p>
 
       <p className="text-sm text-ink-mute">{suggestion.rationale}</p>
+
+      <ErrorText error={accept.error ?? rejection.error} />
+
+      {open === 'editing' ? (
+        <EditForm
+          suggestion={suggestion}
+          categories={categories}
+          pending={working}
+          onCancel={() => setOpen(null)}
+          onAccept={(payload) => accept.mutate({ id: suggestion.id, payload })}
+        />
+      ) : open === 'rejecting' ? (
+        <RejectForm
+          pending={working}
+          onCancel={() => setOpen(null)}
+          onReject={(reason) => rejection.mutate({ id: suggestion.id, reason })}
+        />
+      ) : (
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={working}
+            onClick={() => setOpen('rejecting')}
+          >
+            No este mes
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={working}
+            onClick={() => setOpen('editing')}
+          >
+            Editar
+          </Button>
+          <Button
+            size="sm"
+            disabled={working}
+            onClick={() => accept.mutate({ id: suggestion.id })}
+          >
+            {accept.isPending ? 'Guardando…' : 'Aceptar'}
+          </Button>
+        </div>
+      )}
     </article>
+  );
+}
+
+/**
+ * The proposal, editable.
+ *
+ * It sends only what the user changed, so a field left alone keeps exactly what
+ * was proposed — including the link to the Recurring Expense, which the card
+ * never shows and must never drop.
+ */
+function EditForm({
+  suggestion,
+  categories,
+  pending,
+  onCancel,
+  onAccept,
+}: {
+  suggestion: Suggestion;
+  categories: Category[];
+  pending: boolean;
+  onCancel: () => void;
+  onAccept: (payload: {
+    description: string;
+    category_id: string;
+    amount: string;
+    currency: Currency;
+    date: string;
+    is_fixed: boolean;
+  }) => void;
+}) {
+  const proposed = suggestion.payload;
+  const [description, setDescription] = useState(proposed.description);
+  const [amount, setAmount] = useState(typedAmount(proposed.amount));
+  const [currency, setCurrency] = useState<Currency>(proposed.currency);
+  const [categoryId, setCategoryId] = useState<string | null>(
+    proposed.category_id,
+  );
+  const [date, setDate] = useState(proposed.date);
+  const [isFixed, setIsFixed] = useState(proposed.is_fixed);
+
+  const options = categories
+    .filter((one) => one.type === 'expense')
+    .map((one) => ({ value: one.id, label: one.name }));
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!categoryId || !amount) return;
+    onAccept({
+      description,
+      category_id: categoryId,
+      amount: decimal(amount),
+      currency,
+      date,
+      is_fixed: isFixed,
+    });
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-4 pt-1">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="Monto">
+          <Input
+            required
+            inputMode="decimal"
+            className="num"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        </Field>
+
+        <Field
+          label="Moneda"
+          hint={currency === 'USD' ? 'La cotización se estima sola.' : undefined}
+        >
+          <SelectField
+            value={currency}
+            onChange={(next) => setCurrency(next as Currency)}
+            options={CURRENCY_OPTIONS}
+          />
+        </Field>
+
+        <Field label="Fecha">
+          <Input
+            type="date"
+            required
+            className="num"
+            value={date}
+            onChange={(event) => setDate(event.target.value)}
+          />
+        </Field>
+
+        <Field label="Categoría">
+          <SelectField
+            value={categoryId}
+            onChange={setCategoryId}
+            options={options}
+          />
+        </Field>
+
+        <Field label="Descripción">
+          <Input
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+          />
+        </Field>
+      </div>
+
+      <label className="flex items-center gap-2 text-sm">
+        <Checkbox
+          checked={isFixed}
+          onCheckedChange={(checked) => setIsFixed(checked === true)}
+        />
+        Es un gasto fijo
+      </label>
+
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          Cancelar
+        </Button>
+        <Button type="submit" size="sm" disabled={pending || !categoryId}>
+          {pending ? 'Guardando…' : 'Guardar y aceptar'}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/** "No este mes", and why, if the user feels like saying. */
+function RejectForm({
+  pending,
+  onCancel,
+  onReject,
+}: {
+  pending: boolean;
+  onCancel: () => void;
+  onReject: (reason?: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+
+  return (
+    <form
+      className="flex flex-col gap-4 pt-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onReject(reason.trim() || undefined);
+      }}
+    >
+      <Field label="Motivo" hint="Opcional. Ayuda a las próximas propuestas.">
+        <Input
+          maxLength={250}
+          placeholder="Este mes no lo pagué"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+        />
+      </Field>
+
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          Cancelar
+        </Button>
+        <Button type="submit" variant="outline" size="sm" disabled={pending}>
+          {pending ? 'Guardando…' : 'No este mes'}
+        </Button>
+      </div>
+    </form>
   );
 }

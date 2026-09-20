@@ -8,11 +8,12 @@ is paused, so nothing is ever deleted just to stop being reminded of it.
 """
 
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import RecurringExpense
+from app.models import RecurringExpense, Transaction
 from app.models.enums import TransactionType
 from app.schemas.recurring_expense import (
     RecurringExpenseCreate,
@@ -49,6 +50,28 @@ async def list_recurring_expenses(db: AsyncSession) -> list[RecurringExpense]:
         )
     )
     return list(result.scalars().all())
+
+
+async def last_amount_paid(
+    db: AsyncSession, template: RecurringExpense
+) -> Decimal | None:
+    """
+    What was last actually paid for this template, or None before anything was.
+
+    Only a Transaction linked to the template counts — which is what accepting
+    one of its Suggestions records — so this is exact rather than a guess from
+    descriptions that happen to match. A payment in another currency is not an
+    answer either: an amount only means something next to its own currency, and
+    the template's is the one the next Suggestion will be in.
+    """
+    result = await db.execute(
+        select(Transaction.amount)
+        .where(Transaction.recurring_expense_id == template.id)
+        .where(Transaction.currency == template.currency)
+        .order_by(Transaction.date.desc(), Transaction.created_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
 
 
 async def create_recurring_expense(

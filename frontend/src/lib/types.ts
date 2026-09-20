@@ -42,6 +42,8 @@ export interface Transaction {
   refund_of_id: string | null;
   installment_purchase_id: string | null;
   installment_number: number | null;
+  /** Set when it was recorded by accepting a Recurring Expense's suggestion. */
+  recurring_expense_id: string | null;
   import_id: string | null;
   created_at: string;
 }
@@ -215,7 +217,11 @@ export interface Suggestion {
   payload: AddTransactionPayload;
   rationale: string;
   status: SuggestionStatus;
+  rejection_reason: string | null;
+  /** What accepting it created, e.g. the Transaction. */
+  result_id: string | null;
   expires_on: string;
+  resolved_at: string | null;
   created_at: string;
 }
 

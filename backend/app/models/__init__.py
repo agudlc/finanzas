@@ -27,6 +27,7 @@ from app.models.enums import (
     SCHEDULED_TRIGGERS,
     ConfirmationStatus,
     Currency,
+    IndexOrigin,
     NumberFormat,
     RateType,
     ReviewStatus,
@@ -230,6 +231,40 @@ class RateSnapshot(Base):
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class InflationIndex(Base):
+    """
+    How much prices moved in one month, as a percentage.
+
+    The value is in percentage points, so 1.659 means 1.659%. A month has at
+    most one value per index name, and `source` says whether it came from the
+    official series or from the user; a hand-entered value is never overwritten
+    by a later fetch, the same way a confirmed Exchange Rate never moves.
+    """
+
+    __tablename__ = "inflation_indexes"
+    __table_args__ = (
+        UniqueConstraint("name", "month", name="inflation_indexes_name_month"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    # The published name of the index, e.g. "IPC".
+    name: Mapped[str] = mapped_column(String(50))
+    # The month it describes, stored as its first day.
+    month: Mapped[Date] = mapped_column(DateColumn)
+    value: Mapped[Decimal] = mapped_column(Numeric(8, 3))
+    source: Mapped[IndexOrigin] = mapped_column(Enum(IndexOrigin))
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self):
+        return f"<InflationIndex {self.name} {self.month:%Y-%m}>"
 
 
 class ImportProfile(Base):

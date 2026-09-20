@@ -10,6 +10,7 @@ from app.api.routes.imports import (
     rules_router as categorization_rules_router,
 )
 from app.api.routes.inbox import router as inbox_router
+from app.api.routes.inflation import router as inflation_router
 from app.api.routes.installments import router as installments_router
 from app.api.routes.recurring_expenses import router as recurring_expenses_router
 from app.api.routes.reviews import router as reviews_router
@@ -53,6 +54,7 @@ app.include_router(imports_router, prefix="/api/v1")
 app.include_router(reviews_router, prefix="/api/v1")
 app.include_router(inbox_router, prefix="/api/v1")
 app.include_router(suggestions_router, prefix="/api/v1")
+app.include_router(inflation_router, prefix="/api/v1")
 
 
 @app.get("/health")

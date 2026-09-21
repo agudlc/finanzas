@@ -392,12 +392,23 @@ class ImportProfile(Base):
 
 
 class Import(Base):
-    """One confirmed bulk load, kept so it can be undone."""
+    """
+    One confirmed bulk load, kept so it can be undone.
+
+    It also points at the Review that looks over what it brought in. Several
+    Imports confirmed close together point at the same one: the Review is about
+    "what was just loaded", and loading two files in a row is one of those.
+    """
 
     __tablename__ = "imports"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("import_profiles.id"))
+    # The agent Review that looks over what this Import brought in. Null on
+    # an Import confirmed before there was such a Review at all.
+    review_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("reviews.id"), nullable=True
+    )
     filename: Mapped[str] = mapped_column(String(250))
     imported_count: Mapped[int] = mapped_column(Integer)
     skipped_count: Mapped[int] = mapped_column(Integer)
@@ -475,6 +486,14 @@ class Review(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # The moment the run may begin, for a Review that waits before it starts.
+    # An Import pushes it back as long as more Imports keep arriving, so the
+    # run sees everything that was loaded rather than the first file of three.
+    # Null is "as soon as the worker gets to it", which is most Reviews.
+    start_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

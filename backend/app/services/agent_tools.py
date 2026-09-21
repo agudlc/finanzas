@@ -27,7 +27,14 @@ from app.models import Category, Review, Transaction
 from app.models.enums import Currency, SuggestionKind
 from app.months import add_months, format_month, parse_month
 from app.services import insights as insights_service
-from app.services.brief import budget_lines, figure, named, proposal, section
+from app.services.brief import (
+    budget_lines,
+    figure,
+    named,
+    proposal,
+    section,
+    transaction_line,
+)
 from app.services.categories import list_categories
 from app.services.categorization import list_rules
 from app.services.lookback import earliest_month
@@ -281,7 +288,9 @@ async def _list_transactions(reading: Reading, arguments: dict) -> str:
         )
 
     lines = [
-        await _transaction_line(reading, one)
+        await transaction_line(
+            reading.converter, reading.currency, reading.names, one
+        )
         for one in (await reading.db.execute(statement)).scalars().all()
     ]
     return section(
@@ -289,29 +298,6 @@ async def _list_transactions(reading: Reading, arguments: dict) -> str:
         + (f", in {named_category}" if named_category else ""),
         lines,
         "- Nothing was recorded in those months.",
-    )
-
-
-async def _transaction_line(reading: Reading, one: Transaction) -> str:
-    """
-    One Transaction as the agent reads it: converted, and said so when it was.
-
-    A USD Expense keeps its Original Amount next to the converted one, because
-    "30 dólares" is what the user remembers spending and the pesos are what
-    the month adds up to.
-    """
-    amount = await reading.converter.convert(
-        one.amount, one.currency, reading.currency, one.date, one.exchange_rate
-    )
-    original = (
-        ""
-        if one.currency is reading.currency
-        else f" (originally {figure(one.amount)} {one.currency.value})"
-    )
-    return (
-        f"- {one.date.isoformat()}, {named(reading.names, one.category_id)}, "
-        f'"{one.description or "no description"}", {one.type.value}: '
-        f"{figure(amount)}{original}"
     )
 
 

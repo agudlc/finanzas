@@ -5,6 +5,12 @@ Nothing is saved from a preview: the file is parsed, each row is judged against
 the Categorization Rules and against what is already recorded, and the answer
 goes back for review. Only a confirm writes, and it writes everything at once so
 a half-loaded file is never left behind. An Import can be undone.
+
+Confirming is also what asks the agent to look over what came in — the Rules
+that filed it are learned from what the user does by hand, so just after an
+Import is when there is most to say about them. That happens after the rows are
+safely recorded: a Review that cannot be queued is one thing the user does not
+get, not a file they have to load again.
 """
 
 import uuid
@@ -13,8 +19,10 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clock import Clock
 from app.models import CategorizationRule, Import, ImportProfile, Transaction
 from app.models.enums import RuleOrigin
+from app.queue import ReviewQueue
 from app.schemas.categorization import CategorizationRuleCreate
 from app.schemas.imports import (
     ConfirmRow,
@@ -29,6 +37,7 @@ from app.services.errors import Invalid, NotFound
 from app.services.import_profiles import get_profile
 from app.services.money import RateEstimator
 from app.services.parsing import ParsedRow, parse_rows, read_table
+from app.services.reviews import review_the_import
 from app.services.transactions import build_transaction
 
 
@@ -129,7 +138,11 @@ def _signed(row: ConfirmRow) -> Decimal:
 
 
 async def confirm(
-    db: AsyncSession, data: ImportConfirm, estimator: RateEstimator
+    db: AsyncSession,
+    data: ImportConfirm,
+    estimator: RateEstimator,
+    clock: Clock,
+    queue: ReviewQueue,
 ) -> Import:
     profile = await get_profile(db, data.profile_id)
     keeping = _every_row_categorised([row for row in data.rows if not row.skip])
@@ -159,6 +172,7 @@ async def confirm(
 
     await _remember(db, keeping)
     await db.commit()
+    await review_the_import(db, record, clock, queue)
     await db.refresh(record)
     return record
 

@@ -43,5 +43,5 @@ async def read_inbox(
         ],
         pending_count=len(pending),
         insights=await waiting_in(db, clock.today()),
-        reviews=await waiting_reviews(db),
+        reviews=await waiting_reviews(db, clock),
     )

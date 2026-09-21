@@ -3,7 +3,9 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clock import Clock, get_clock
 from app.database import get_db
+from app.queue import ReviewQueue, get_review_queue
 from app.schemas.categorization import (
     CategorizationRuleCreate,
     CategorizationRuleResponse,
@@ -132,8 +134,11 @@ async def confirm_import(
     confirmation: ImportConfirm,
     db: AsyncSession = Depends(get_db),
     estimator: RateEstimator = Depends(get_rate_estimator),
+    clock: Clock = Depends(get_clock),
+    queue: ReviewQueue = Depends(get_review_queue),
 ):
-    return await service.confirm(db, confirmation, estimator)
+    """Records the rows, and asks the agent to look over what came in."""
+    return await service.confirm(db, confirmation, estimator, clock, queue)
 
 
 @router.delete("/{import_id}", status_code=status.HTTP_204_NO_CONTENT)

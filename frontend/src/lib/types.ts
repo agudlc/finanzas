@@ -15,6 +15,7 @@ export type RowStatus = 'new' | 'duplicate' | 'ignored' | 'needs_category';
 export type ReviewTrigger =
   | 'recurring_monthly'
   | 'month_end'
+  | 'import_finished'
   | 'manual'
   | 'manual_agent';
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed';

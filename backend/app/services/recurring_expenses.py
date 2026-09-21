@@ -13,9 +13,10 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import RecurringExpense, Transaction
+from app.models import NO_ADJUSTMENT, RecurringExpense, Transaction
 from app.models.enums import TransactionType
 from app.schemas.recurring_expense import (
+    AdjustmentRuleBody,
     RecurringExpenseCreate,
     RecurringExpenseUpdate,
 )
@@ -31,6 +32,19 @@ async def _require_expense_category(db: AsyncSession, category_id: uuid.UUID) ->
             f"'{category.name}' is an income Category, which no Recurring "
             "Expense can use"
         )
+
+
+def _adjustment_columns(rule: AdjustmentRuleBody | None) -> dict:
+    """The Adjustment Rule spread over the columns that hold it."""
+    if rule is None:
+        return dict(NO_ADJUSTMENT)
+    return {
+        "adjustment_kind": rule.kind,
+        "adjustment_period_months": rule.period_months,
+        "adjustment_percentage": rule.percentage,
+        "adjustment_index_name": rule.index_name,
+        "adjustment_start_month": rule.start_month,
+    }
 
 
 async def get_recurring_expense(
@@ -78,7 +92,8 @@ async def create_recurring_expense(
     db: AsyncSession, data: RecurringExpenseCreate
 ) -> RecurringExpense:
     await _require_expense_category(db, data.category_id)
-    template = RecurringExpense(**data.model_dump())
+    fields = data.model_dump(exclude={"adjustment"})
+    template = RecurringExpense(**fields, **_adjustment_columns(data.adjustment))
     db.add(template)
     await db.commit()
     await db.refresh(template)
@@ -89,9 +104,11 @@ async def update_recurring_expense(
     db: AsyncSession, recurring_id: uuid.UUID, changes: RecurringExpenseUpdate
 ) -> RecurringExpense:
     template = await get_recurring_expense(db, recurring_id)
-    changed = changes.model_dump(exclude_unset=True)
+    changed = changes.model_dump(exclude_unset=True, exclude={"adjustment"})
     if "category_id" in changed:
         await _require_expense_category(db, changed["category_id"])
+    if "adjustment" in changes.model_fields_set:
+        changed.update(_adjustment_columns(changes.adjustment))
     for field, value in changed.items():
         setattr(template, field, value)
     await db.commit()

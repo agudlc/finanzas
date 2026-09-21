@@ -20,7 +20,25 @@ import {
   useRecurringExpenses,
   useUpdateRecurringExpense,
 } from '@/lib/queries';
-import type { Currency, RecurringExpense } from '@/lib/types';
+import type { AdjustmentRule, Currency, RecurringExpense } from '@/lib/types';
+
+/** The kinds of Adjustment Rule, plus the "no rule at all" the form needs. */
+const ADJUSTMENT_OPTIONS = [
+  { value: 'none', label: 'No se ajusta' },
+  { value: 'percentage', label: 'Por un porcentaje fijo' },
+  { value: 'index', label: 'Por inflación (IPC)' },
+];
+
+/** How a rule reads in a list: "ajusta 10% cada 6 meses". */
+function adjustmentLabel(rule: AdjustmentRule): string {
+  const by =
+    rule.kind === 'percentage'
+      ? `${Number(rule.percentage)}%`
+      : `por ${rule.index_name}`;
+  return `ajusta ${by} cada ${rule.period_months} ${
+    rule.period_months === 1 ? 'mes' : 'meses'
+  }`;
+}
 
 /**
  * The Expenses expected every month, next to the Transactions they will produce.
@@ -73,6 +91,9 @@ export default function RecurringExpenses() {
                 día {template.expected_day} ·{' '}
                 {byId.get(template.category_id)?.name ?? 'sin categoría'}
                 {template.is_fixed ? ' · fijo' : ''}
+                {template.adjustment
+                  ? ` · ${adjustmentLabel(template.adjustment)}`
+                  : ''}
                 {template.is_active ? '' : ' · en pausa'}
               </span>
               <span className="dots" />
@@ -158,6 +179,19 @@ function RecurringForm({
   );
   const [day, setDay] = useState(String(template?.expected_day ?? 1));
   const [isFixed, setIsFixed] = useState(template?.is_fixed ?? false);
+  const [adjustmentKind, setAdjustmentKind] = useState(
+    template?.adjustment?.kind ?? 'none',
+  );
+  const [period, setPeriod] = useState(
+    String(template?.adjustment?.period_months ?? 6),
+  );
+  const [percentage, setPercentage] = useState(
+    template?.adjustment?.percentage ? typedAmount(template.adjustment.percentage) : '',
+  );
+  // A month input speaks "2026-01"; the API stores the month's first day.
+  const [startMonth, setStartMonth] = useState(
+    (template?.adjustment?.start_month ?? '').slice(0, 7),
+  );
 
   const categories = useCategories();
   const create = useCreateRecurringExpense();
@@ -182,6 +216,17 @@ function RecurringForm({
       expected_day: Number(day),
       currency,
       is_fixed: isFixed,
+      adjustment:
+        adjustmentKind === 'none'
+          ? null
+          : {
+              kind: adjustmentKind,
+              period_months: Number(period),
+              start_month: `${startMonth}-01`,
+              ...(adjustmentKind === 'percentage'
+                ? { percentage: decimal(percentage) }
+                : {}),
+            },
     };
 
     if (template) {
@@ -247,6 +292,63 @@ function RecurringForm({
         </Field>
       </div>
 
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field
+          label="Ajuste"
+          className="sm:col-span-2"
+          hint="Como en un contrato de alquiler: cada tantos meses, por un porcentaje o por el IPC."
+        >
+          <SelectField
+            value={adjustmentKind}
+            onChange={(next) =>
+              setAdjustmentKind(next as AdjustmentRule['kind'] | 'none')
+            }
+            options={ADJUSTMENT_OPTIONS}
+          />
+        </Field>
+
+        {adjustmentKind === 'none' ? null : (
+          <>
+            <Field label="Cada cuántos meses">
+              <Input
+                type="number"
+                min={1}
+                required
+                className="num"
+                value={period}
+                onChange={(event) => setPeriod(event.target.value)}
+              />
+            </Field>
+
+            <Field
+              label="Desde el mes"
+              hint="El mes en que arranca el ciclo; el primer ajuste cae un período después."
+            >
+              <Input
+                type="month"
+                required
+                className="num"
+                value={startMonth}
+                onChange={(event) => setStartMonth(event.target.value)}
+              />
+            </Field>
+
+            {adjustmentKind === 'percentage' ? (
+              <Field label="Porcentaje">
+                <Input
+                  required
+                  inputMode="decimal"
+                  placeholder="10,00"
+                  className="num"
+                  value={percentage}
+                  onChange={(event) => setPercentage(event.target.value)}
+                />
+              </Field>
+            ) : null}
+          </>
+        )}
+      </div>
+
       <label className="flex items-center gap-2 text-sm">
         <Checkbox
           checked={isFixed}
@@ -258,7 +360,16 @@ function RecurringForm({
       <ErrorText error={error} />
 
       <div className="flex justify-end">
-        <Button type="submit" disabled={pending || !categoryId || !amount}>
+        <Button
+          type="submit"
+          disabled={
+            pending ||
+            !categoryId ||
+            !amount ||
+            (adjustmentKind !== 'none' && !startMonth) ||
+            (adjustmentKind === 'percentage' && !percentage)
+          }
+        >
           {pending ? 'Guardando…' : 'Guardar'}
         </Button>
       </div>

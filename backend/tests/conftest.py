@@ -116,9 +116,10 @@ class EagerReviewQueue:
     `break_with` for a producer that raises.
     """
 
-    def __init__(self, sessionmaker, clock: Clock):
+    def __init__(self, sessionmaker, clock: Clock, index_source):
         self._sessionmaker = sessionmaker
         self._clock = clock
+        self._index_source = index_source
         self._producers = PRODUCERS
         self._held = False
 
@@ -127,7 +128,7 @@ class EagerReviewQueue:
         self._held = True
 
     def break_with(self, message: str) -> None:
-        async def explode(db, review, clock):
+        async def explode(db, review, clock, indexes):
             raise RuntimeError(message)
 
         self._producers = {trigger: [explode] for trigger in ReviewTrigger}
@@ -136,7 +137,13 @@ class EagerReviewQueue:
         if self._held:
             return
         async with self._sessionmaker() as session:
-            await run_review(session, review_id, self._clock, self._producers)
+            await run_review(
+                session,
+                review_id,
+                self._clock,
+                self._producers,
+                self._index_source,
+            )
 
 
 def _dsn(url: str) -> str:
@@ -244,9 +251,9 @@ def index_source() -> FixedIndexSource:
 
 
 @pytest.fixture
-async def queue(engine, clock) -> EagerReviewQueue:
+async def queue(engine, clock, index_source) -> EagerReviewQueue:
     return EagerReviewQueue(
-        async_sessionmaker(engine, expire_on_commit=False), clock
+        async_sessionmaker(engine, expire_on_commit=False), clock, index_source
     )
 
 

@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime
 from decimal import Decimal
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 from app.models.enums import (
     SCHEDULED_TRIGGERS,
+    AdjustmentKind,
     ConfirmationStatus,
     Currency,
     IndexOrigin,
@@ -116,6 +118,53 @@ class InstallmentPurchase(Base):
     )
 
 
+@dataclass(frozen=True)
+class AdjustmentRule:
+    """
+    How a Recurring Expense's amount changes over time, as a rent contract says.
+
+    It is the template's adjustment columns read as one thing, because they
+    only mean anything together: a period without a percentage or an index name
+    adjusts by nothing.
+    """
+
+    kind: AdjustmentKind
+    period_months: int
+    start_month: Date
+    percentage: Decimal | None = None
+    index_name: str | None = None
+
+
+# The shape the adjustment columns take when a template has no rule at all.
+NO_ADJUSTMENT = {
+    "adjustment_kind": AdjustmentKind.none,
+    "adjustment_period_months": None,
+    "adjustment_percentage": None,
+    "adjustment_index_name": None,
+    "adjustment_start_month": None,
+}
+
+# Each kind fills its own columns and leaves the others null, so a half-written
+# rule cannot reach the database from anywhere.
+ADJUSTMENT_IS_COHERENT = """
+    (adjustment_kind = 'none'
+        AND adjustment_period_months IS NULL
+        AND adjustment_start_month IS NULL
+        AND adjustment_percentage IS NULL
+        AND adjustment_index_name IS NULL)
+    OR (adjustment_kind = 'percentage'
+        AND adjustment_period_months IS NOT NULL
+        AND adjustment_start_month IS NOT NULL
+        AND adjustment_percentage IS NOT NULL
+        AND adjustment_index_name IS NULL)
+    OR (adjustment_kind = 'index'
+        AND adjustment_period_months IS NOT NULL
+        AND adjustment_start_month IS NOT NULL
+        AND adjustment_index_name IS NOT NULL
+        AND adjustment_percentage IS NULL)
+"""
+
+
 class RecurringExpense(Base):
     """
     A template for an Expense expected every month.
@@ -130,6 +179,11 @@ class RecurringExpense(Base):
         CheckConstraint(
             "expected_day BETWEEN 1 AND 31", name="recurring_expenses_expected_day"
         ),
+        CheckConstraint(
+            "adjustment_period_months IS NULL OR adjustment_period_months >= 1",
+            name="recurring_expenses_adjustment_period",
+        ),
+        CheckConstraint(ADJUSTMENT_IS_COHERENT, name="recurring_expenses_adjustment"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -142,9 +196,44 @@ class RecurringExpense(Base):
     expected_day: Mapped[int] = mapped_column(Integer)
     is_fixed: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # The Adjustment Rule, spread over columns; `adjustment` reads it as one.
+    adjustment_kind: Mapped[AdjustmentKind] = mapped_column(
+        Enum(AdjustmentKind), default=AdjustmentKind.none
+    )
+    # Every how many months the adjustment falls due, counted from its start.
+    adjustment_period_months: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    # Percentage points: 10.00 raises the amount by 10%.
+    adjustment_percentage: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 2), nullable=True
+    )
+    adjustment_index_name: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    # The month the cycle counts from, stored as its first day. The cycle's own
+    # month is not an adjustment: the first one falls a period after it.
+    adjustment_start_month: Mapped[Date | None] = mapped_column(
+        DateColumn, nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+    @property
+    def adjustment(self) -> AdjustmentRule | None:
+        """The rule this template carries, or None when it carries none."""
+        if self.adjustment_kind is AdjustmentKind.none:
+            return None
+        return AdjustmentRule(
+            kind=self.adjustment_kind,
+            period_months=self.adjustment_period_months,
+            start_month=self.adjustment_start_month,
+            percentage=self.adjustment_percentage,
+            index_name=self.adjustment_index_name,
+        )
 
     def __repr__(self):
         return f"<RecurringExpense {self.description}>"

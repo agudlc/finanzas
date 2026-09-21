@@ -61,6 +61,18 @@ export interface InstallmentPurchase {
   cuotas?: Transaction[];
 }
 
+/** How a Recurring Expense's amount moves: every N months, by this much. */
+export interface AdjustmentRule {
+  kind: 'percentage' | 'index';
+  period_months: number;
+  /** The month the cycle counts from, as its first day. */
+  start_month: string;
+  /** Percentage points, for a percentage rule: "10.00" raises it by 10%. */
+  percentage: string | null;
+  /** The Inflation Index it follows, for an index rule. */
+  index_name: string | null;
+}
+
 export interface RecurringExpense {
   id: string;
   description: string;
@@ -70,6 +82,7 @@ export interface RecurringExpense {
   expected_day: number;
   is_fixed: boolean;
   is_active: boolean;
+  adjustment: AdjustmentRule | null;
   created_at: string;
 }
 

@@ -256,3 +256,141 @@ async def test_only_an_expense_can_come_from_a_recurring_expense(client):
 
     assert response.status_code == 422
     assert "only an Expense" in response.json()["detail"]
+
+
+ADJUSTMENT = {
+    "kind": "percentage",
+    "period_months": 6,
+    "percentage": "10.00",
+    "start_month": "2026-01-01",
+}
+
+
+async def test_a_recurring_expense_can_carry_an_adjustment_rule(client):
+    template = await create_recurring(client, adjustment=ADJUSTMENT)
+
+    assert template["adjustment"] == {
+        "kind": "percentage",
+        "period_months": 6,
+        "percentage": "10.00",
+        "index_name": None,
+        "start_month": "2026-01-01",
+    }
+
+
+async def test_a_recurring_expense_carries_no_rule_unless_it_is_given_one(client):
+    template = await create_recurring(client)
+
+    assert template["adjustment"] is None
+
+
+async def test_an_adjustment_rule_can_follow_an_inflation_index(client):
+    template = await create_recurring(
+        client,
+        adjustment={
+            "kind": "index",
+            "period_months": 12,
+            "start_month": "2026-01-01",
+        },
+    )
+
+    assert template["adjustment"]["kind"] == "index"
+    assert template["adjustment"]["index_name"] == "IPC", "the index it defaults to"
+    assert template["adjustment"]["percentage"] is None
+
+
+async def test_the_month_a_cycle_starts_from_is_kept_as_a_month(client):
+    template = await create_recurring(
+        client, adjustment={**ADJUSTMENT, "start_month": "2026-01-17"}
+    )
+
+    assert template["adjustment"]["start_month"] == "2026-01-01"
+
+
+async def test_an_adjustment_rule_can_be_added_to_a_template(client):
+    template = await create_recurring(client)
+
+    response = await client.patch(
+        f"/recurring-expenses/{template['id']}", json={"adjustment": ADJUSTMENT}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["adjustment"]["percentage"] == "10.00"
+
+
+async def test_an_adjustment_rule_can_be_taken_off_a_template(client):
+    template = await create_recurring(client, adjustment=ADJUSTMENT)
+
+    response = await client.patch(
+        f"/recurring-expenses/{template['id']}", json={"adjustment": None}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["adjustment"] is None
+
+
+async def test_an_adjustment_rule_is_left_alone_by_an_unrelated_edit(client):
+    template = await create_recurring(client, adjustment=ADJUSTMENT)
+
+    response = await client.patch(
+        f"/recurring-expenses/{template['id']}", json={"expected_day": 9}
+    )
+
+    assert response.json()["adjustment"] == template["adjustment"]
+
+
+async def test_a_percentage_rule_needs_a_percentage(client):
+    response = await client.post(
+        "/recurring-expenses/",
+        json=recurring_body(
+            category_id=(await default_category(client, "Alquiler", "expense"))["id"],
+            adjustment={
+                "kind": "percentage",
+                "period_months": 6,
+                "start_month": "2026-01-01",
+            },
+        ),
+    )
+
+    assert response.status_code == 422
+
+
+async def test_a_percentage_rule_carries_no_index_name(client):
+    response = await client.post(
+        "/recurring-expenses/",
+        json=recurring_body(
+            category_id=(await default_category(client, "Alquiler", "expense"))["id"],
+            adjustment={**ADJUSTMENT, "index_name": "IPC"},
+        ),
+    )
+
+    assert response.status_code == 422
+
+
+async def test_an_index_rule_carries_no_percentage(client):
+    response = await client.post(
+        "/recurring-expenses/",
+        json=recurring_body(
+            category_id=(await default_category(client, "Alquiler", "expense"))["id"],
+            adjustment={
+                "kind": "index",
+                "period_months": 12,
+                "percentage": "10.00",
+                "start_month": "2026-01-01",
+            },
+        ),
+    )
+
+    assert response.status_code == 422
+
+
+async def test_an_adjustment_rule_happens_every_month_at_least(client):
+    response = await client.post(
+        "/recurring-expenses/",
+        json=recurring_body(
+            category_id=(await default_category(client, "Alquiler", "expense"))["id"],
+            adjustment={**ADJUSTMENT, "period_months": 0},
+        ),
+    )
+
+    assert response.status_code == 422

@@ -118,9 +118,10 @@ async def create_refund(
     return await create_transaction(db, refund, estimator)
 
 
-async def update_transaction(
+async def _checked(
     db: AsyncSession, transaction_id: uuid.UUID, changes: TransactionUpdate
-) -> Transaction:
+) -> tuple[Transaction, dict]:
+    """The Transaction and the fields to set on it, held to every rule first."""
     transaction = await get_transaction(db, transaction_id)
     changed = changes.model_dump(exclude_unset=True)
 
@@ -128,9 +129,41 @@ async def update_transaction(
     _confirm_a_cuota_whose_amount_was_edited(transaction, changed)
     after = TransactionCreate.model_validate(transaction).model_copy(update=changed)
     await _check_domain_rules(db, after, transaction_id=transaction_id)
+    return transaction, changed
 
+
+async def check_change(
+    db: AsyncSession, transaction_id: uuid.UUID, changes: TransactionUpdate
+) -> None:
+    """
+    Everything changing it would check, without changing anything.
+
+    What a Suggestion that proposes a change is held to before it is stored:
+    a proposal the app could not apply is refused where it is made rather than
+    waiting in the Inbox to fail when the user presses accept.
+    """
+    await _checked(db, transaction_id, changes)
+
+
+async def change_transaction(
+    db: AsyncSession, transaction_id: uuid.UUID, changes: TransactionUpdate
+) -> Transaction:
+    """
+    The Transaction as the changes leave it, checked but not committed.
+
+    The commit is the caller's, so accepting a Suggestion can write the change
+    and the Suggestion it came from in one go.
+    """
+    transaction, changed = await _checked(db, transaction_id, changes)
     for field, value in changed.items():
         setattr(transaction, field, value)
+    return transaction
+
+
+async def update_transaction(
+    db: AsyncSession, transaction_id: uuid.UUID, changes: TransactionUpdate
+) -> Transaction:
+    transaction = await change_transaction(db, transaction_id, changes)
     await db.commit()
     await db.refresh(transaction)
     return transaction
@@ -166,12 +199,28 @@ def _check_exchange_rate_is_not_rewritten(
             raise Conflict("a confirmed Exchange Rate cannot be changed")
 
 
+async def check_proposed(db: AsyncSession, data: TransactionCreate) -> None:
+    """Everything recording it would check, except what is not settled yet."""
+    await _check_domain_rules(db, data, transaction_id=None, proposed=True)
+
+
 async def _check_domain_rules(
-    db: AsyncSession, after: TransactionCreate, transaction_id: uuid.UUID | None
+    db: AsyncSession,
+    after: TransactionCreate,
+    transaction_id: uuid.UUID | None,
+    proposed: bool = False,
 ) -> None:
-    """Everything the Transaction must be true of once it is stored."""
+    """
+    Everything the Transaction must be true of once it is stored.
+
+    One list rather than two, so a rule added here cannot be added to what is
+    recorded and forgotten about what is proposed. A proposal is held to all of
+    it but the Exchange Rate, which it does not carry: the estimator fills one
+    in at the moment the user accepts it and the Transaction is recorded.
+    """
     await _check_category_type_matches(db, after)
-    _check_exchange_rate_matches_currency(after)
+    if not proposed:
+        _check_exchange_rate_matches_currency(after)
     _check_only_expenses_go_negative(after)
     await _check_refund(db, after, transaction_id)
     await _check_installment(db, after)

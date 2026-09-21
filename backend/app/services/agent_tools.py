@@ -423,7 +423,7 @@ async def _past_rejections(reading: Reading, arguments: dict) -> str:
         )
         lines.append(
             f"- in {format_month(one.month)} they said no to "
-            f"{proposal(one, reading.names)}: {reason}"
+            f"{await proposal(reading.db, one, reading.names)}: {reason}"
         )
     return section(
         "Proposals the user rejected", lines, "- They have rejected nothing."

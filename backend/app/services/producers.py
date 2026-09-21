@@ -8,7 +8,6 @@ after midnight still does the month it was created for. The ARQ job is only a
 wrapper that opens a session and calls these.
 """
 
-import uuid
 from datetime import date as Date
 from decimal import Decimal
 
@@ -17,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.inflation import IPC, IndexProvider
 from app.models import AdjustmentRule, InflationIndex, RecurringExpense, Review
 from app.models.enums import AdjustmentKind, Currency, SuggestionKind
-from app.months import add_months, days_in_month, format_month
+from app.months import add_months, days_in_month
 from app.services.adjustments import (
     HUNDRED,
     Adjustment,
@@ -42,21 +41,6 @@ MONTH_NAMES = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 ]
-
-
-def add_transaction_key(recurring_id: uuid.UUID, month: Date) -> str:
-    """
-    What an `add_transaction` proposal is about: this template, this month.
-
-    One key per template and month is what makes a rejection mean "not this
-    month": the next month asks a different question.
-    """
-    return f"{recurring_id}:{format_month(month)}"
-
-
-def set_budget_key(category_id: uuid.UUID, month: Date) -> str:
-    """What a `set_budget` proposal is about: this Category, this month."""
-    return f"{category_id}:{format_month(month)}"
 
 
 def _expected_date(template: RecurringExpense, month: Date) -> Date:
@@ -179,7 +163,6 @@ async def propose_recurring_expenses(
             review.id,
             kind=SuggestionKind.add_transaction,
             month=month,
-            dedupe_key=add_transaction_key(template.id, month),
             payload={
                 "description": template.description,
                 "category_id": str(template.category_id),
@@ -261,7 +244,6 @@ async def propose_budget_adjustments(
             review.id,
             kind=SuggestionKind.set_budget,
             month=month,
-            dedupe_key=set_budget_key(budget.category_id, month),
             payload={
                 "category_id": str(budget.category_id),
                 "month": month.isoformat(),

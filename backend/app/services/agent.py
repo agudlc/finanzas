@@ -7,29 +7,38 @@ stops when the model has nothing left to call. There is no framework under it
 yet on purpose (root-idea, phase 2b): what a framework would be doing is meant
 to be visible first.
 
-The tools are recording an Insight and a handful of reads (`agent_tools`).
-None of them changes anything — the agent has no write path at all (ADR-0002),
-so a loop that goes wrong costs the user a sentence they disagree with and
-nothing else. What the reads may reach is the user's call, and the loop settles
-it once at the top of the run: everything past the lookback is refused by the
-tool rather than fetched. Everything the run leaves behind
-beyond the Insights — the transcript, what it cost, which prompt asked for it —
-is written on the Review, so a strange observation can be read back to the
-conversation that produced it.
+The tools are a handful of reads (`agent_tools`), recording an Insight, and
+proposing a change (`agent_proposals`). None of them changes anything the user
+has recorded: the agent has no write path at all (ADR-0002), and the most a
+loop that goes wrong can leave behind is a sentence the user disagrees with and
+a proposal they reject. What the reads may reach is the user's call, and the
+loop settles it once at the top of the run: everything past the lookback is
+refused by the tool rather than fetched. Everything the run leaves behind
+beyond the Insights and the Suggestions — the transcript, what it cost, which
+prompt asked for it — is written on the Review, so a strange observation can be
+read back to the conversation that produced it.
 """
+
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm import Reply, ToolCall
 from app.models import Review
 from app.services import insights as insights_service
+from app.services.agent_proposals import (
+    KIND_OF,
+    TOOLS as PROPOSE_TOOLS,
+    Refused,
+    propose_through_tool,
+)
 from app.services.agent_tools import TOOLS as READ_TOOLS, Reading, read
 from app.services.brief import core_brief
 from app.services.outside import Outside
 
 # Bumped whenever the system prompt changes, so a run can be read against the
 # words that produced it rather than against today's.
-PROMPT_VERSION = "2026-09-b"
+PROMPT_VERSION = "2026-09-c"
 
 # The brief is already complete and the tools only fill in around it, so a run
 # that has not finished in ten turns is looping rather than working.
@@ -44,10 +53,21 @@ You are the coach inside Finanzas, a personal finance app used by one person
 living in Argentina. You are given a brief about one month of their money and
 you say what you notice about it.
 
-You cannot change anything. The only tool that writes anything records an
-Insight: a read-only observation that waits in the user's Inbox during the
-month it is about. If something would need data to change, say it as an
-observation anyway — do not pretend to have done it.
+You cannot change anything yourself. You have two ways of saying something.
+
+Record an Insight: a read-only observation that waits in the user's Inbox
+during the month it is about. It changes no data.
+
+Or propose a change, with one of the `propose_` tools. Each one is a shape of
+change the app knows how to apply; the proposal waits in the Inbox until the
+user accepts it, edits it or rejects it, and nothing happens until they do.
+Anything you want that no `propose_` tool covers is an Insight instead — say
+it as an observation and do not pretend to have done it.
+
+A proposal you make may be refused: the payload is wrong, the change breaks a
+rule, or you have proposed it before. The tool says which, and nothing is
+stored. Fix it and call the tool again, or drop it and say it as an
+observation; do not keep sending the same thing.
 
 The other tools read. The brief already holds the month under review, so reach
 for them when a figure in it raises a question — what those Delivery expenses
@@ -60,6 +80,10 @@ How to decide what to say:
 - Record an Insight only when you have something specific and useful. Two or
   three is plenty for one month; none at all is a perfectly good answer for a
   quiet month, and better than filling space.
+- Propose only what you are sure of and the user would plainly want. A
+  proposal is a question they have to answer, so a doubtful one costs them
+  more than saying nothing. Recategorize a Transaction only when its
+  description makes the right Category obvious and the one it is in wrong.
 - Point at the numbers in the brief. "Gastaste 120.000 en Delivery, 40% más que
   el límite" is worth saying; "cuidado con los gastos" is not.
 - Do not repeat an observation already recorded in the last two months, and do
@@ -74,8 +98,8 @@ How to write:
 - The topic is a few words. The body is one short paragraph.
 - Amounts as the app writes them: 475.946,65.
 
-When you have nothing left to record, answer in one short sentence and stop
-calling tools.
+When you have nothing left to record or propose, answer in one short
+sentence and stop calling tools.
 """.strip()
 
 RECORD = {
@@ -106,8 +130,9 @@ RECORD = {
     },
 }
 
-# What the model is offered: the one tool that writes, and the reads.
-TOOLS = [RECORD, *READ_TOOLS]
+# What the model is offered: the reads, the one tool that records an
+# observation, and one tool per shape of change it may propose.
+TOOLS = [RECORD, *PROPOSE_TOOLS, *READ_TOOLS]
 
 # What the Review says about itself when the model kept calling tools past the
 # cap. The run is not a failure: whatever it recorded before the cap stands.
@@ -155,6 +180,29 @@ async def review_with_agent(
     review.transcript = messages
 
 
+@dataclass(frozen=True)
+class Answer:
+    """
+    What one tool said back, and whether it is telling the model it failed.
+
+    The flag is what keeps a refusal from reading like a success. A read that
+    answers with the lookback instead of the rows is still an answer; a
+    proposal that was refused stored nothing, and the model has to know that
+    to either fix it or let it go.
+    """
+
+    content: str
+    is_error: bool = False
+
+    def block(self, call_id: str) -> dict:
+        return {
+            "type": "tool_result",
+            "tool_use_id": call_id,
+            "content": self.content,
+            **({"is_error": True} if self.is_error else {}),
+        }
+
+
 async def _results(
     db: AsyncSession, review: Review, reading: Reading, reply: Reply
 ) -> dict:
@@ -162,11 +210,7 @@ async def _results(
     return {
         "role": "user",
         "content": [
-            {
-                "type": "tool_result",
-                "tool_use_id": call.id,
-                "content": await _run_tool(db, review, reading, call),
-            }
+            (await _run_tool(db, review, reading, call)).block(call.id)
             for call in reply.tool_calls
         ],
     }
@@ -174,20 +218,36 @@ async def _results(
 
 async def _run_tool(
     db: AsyncSession, review: Review, reading: Reading, call: ToolCall
-) -> str:
+) -> Answer:
     """
     Do what the model asked, and answer it in a sentence it can act on.
 
     A tool that cannot be run is answered rather than raised: the model asking
-    for something that does not exist, or for a month it is not allowed, is a
-    thing to correct within the run, not a reason to lose the Insights it
-    already recorded.
+    for something that does not exist, for a month it is not allowed, or for a
+    change the app cannot apply is a thing to correct within the run, not a
+    reason to lose the Insights and proposals it already got right.
     """
-    if call.name != RECORD_INSIGHT:
-        return await read(reading, call.name, call.arguments)
-    topic = str(call.arguments.get("topic") or "").strip()
-    body = str(call.arguments.get("body") or "").strip()
+    if call.name == RECORD_INSIGHT:
+        return _record(db, review, call.arguments)
+    if call.name in KIND_OF:
+        return await _propose(db, review, call.name, call.arguments)
+    return Answer(await read(reading, call.name, call.arguments))
+
+
+def _record(db: AsyncSession, review: Review, arguments: dict) -> Answer:
+    topic = str(arguments.get("topic") or "").strip()
+    body = str(arguments.get("body") or "").strip()
     if not topic or not body:
-        return "An Insight needs both a topic and a body."
+        return Answer("An Insight needs both a topic and a body.", is_error=True)
     insights_service.record(db, review, topic[:TOPIC_LENGTH], body)
-    return "Recorded."
+    return Answer("Recorded.")
+
+
+async def _propose(
+    db: AsyncSession, review: Review, name: str, arguments: dict
+) -> Answer:
+    try:
+        await propose_through_tool(db, review, name, arguments)
+    except Refused as refusal:
+        return Answer(str(refusal), is_error=True)
+    return Answer("Proposed. It is waiting in the user's Inbox.")

@@ -131,6 +131,9 @@ class ScriptedLLM:
         self.replies: list[Reply] = [Reply(text="No veo nada para marcar.")]
         self.runs: list[list[dict]] = []
         self.systems: list[str] = []
+        # What the model was offered each turn, so a test can say which tools
+        # a run had without reaching inside the loop for them.
+        self.tools: list[list[dict]] = []
         self.failure: tuple[str, int] | None = None
 
     def says(self, *insights: tuple[str, str], then: str = "Listo.") -> None:
@@ -174,6 +177,7 @@ class ScriptedLLM:
     async def reply(self, system: str, messages: list[dict], tools: list[dict]):
         self.systems.append(system)
         self.runs.append(deepcopy(messages))
+        self.tools.append(tools)
         if self.failure is not None and len(self.runs) > self.failure[1]:
             raise LLMUnavailable(self.failure[0])
         return self.replies[0] if len(self.replies) == 1 else self.replies.pop(0)

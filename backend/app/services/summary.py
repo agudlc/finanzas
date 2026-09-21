@@ -26,10 +26,17 @@ from app.services.transactions import in_month, list_transactions
 RECENT_TRANSACTIONS = 10
 
 
-async def _converted_totals(
+async def converted_totals(
     db: AsyncSession, month: Date, currency: Currency, converter: MoneyConverter
-) -> tuple[Decimal, Decimal, dict[str, CategorySpending]]:
-    """The month's Income, its Expenses, and what each Category cost."""
+) -> tuple[Decimal, Decimal, list[CategorySpending]]:
+    """
+    The month's Income, its Expenses, and what each expense Category cost.
+
+    The one pass over the month's Transactions everything else here is built
+    on, and what the agent's brief reads too: the totals are the same numbers
+    the dashboard shows, so the model is never told something the user cannot
+    see for themselves.
+    """
     statement = in_month(
         select(Transaction, Category).join(
             Category, Category.id == Transaction.category_id
@@ -64,12 +71,13 @@ async def _converted_totals(
         else:
             slice_.total += amount
 
-    return round_money(income), round_money(expenses), per_category
+    return round_money(income), round_money(expenses), _biggest_first(per_category)
 
 
 def _biggest_first(
     per_category: dict[str, CategorySpending],
 ) -> list[CategorySpending]:
+    """The Categories that cost the most first, which is what everyone wants."""
     return sorted(
         (
             slice_.model_copy(update={"total": round_money(slice_.total)})
@@ -84,10 +92,8 @@ async def spending_by_category(
     db: AsyncSession, month: Date, currency: Currency, converter: MoneyConverter
 ) -> MonthlySpending:
     month = month_of(month)
-    _, _, per_category = await _converted_totals(db, month, currency, converter)
-    return MonthlySpending(
-        month=month, currency=currency, categories=_biggest_first(per_category)
-    )
+    _, _, per_category = await converted_totals(db, month, currency, converter)
+    return MonthlySpending(month=month, currency=currency, categories=per_category)
 
 
 async def summarise_month(
@@ -98,7 +104,7 @@ async def summarise_month(
     converter: MoneyConverter,
 ) -> MonthlySummary:
     month = month_of(month)
-    income, expenses, per_category = await _converted_totals(
+    income, expenses, per_category = await converted_totals(
         db, month, currency, converter
     )
     budgets: list[BudgetProgress] = await list_progress(db, month, clock, converter)
@@ -111,7 +117,7 @@ async def summarise_month(
         total_income=income,
         total_expenses=expenses,
         monthly_result=round_money(income - expenses),
-        by_category=_biggest_first(per_category),
+        by_category=per_category,
         budgets=budgets,
         recent=[TransactionResponse.model_validate(t) for t in recent],
     )

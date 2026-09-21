@@ -1,11 +1,11 @@
 """
 The producers: the arithmetic a Review runs to decide what to propose.
 
-Each one is a plain function of a session, a Review and a clock, so it can be
-read and tested without a worker anywhere near it. The month to propose for is
-the Review's, not today's: a run the worker picked up after midnight still does
-the month it was created for. The ARQ job is only a wrapper that opens a
-session and calls these.
+Each one is a plain function of a session, a Review and what lies outside the
+database, so it can be read and tested without a worker anywhere near it. The
+month to propose for is the Review's, not today's: a run the worker picked up
+after midnight still does the month it was created for. The ARQ job is only a
+wrapper that opens a session and calls these.
 """
 
 import uuid
@@ -14,7 +14,6 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.clock import Clock
 from app.inflation import IPC, IndexProvider
 from app.models import AdjustmentRule, InflationIndex, RecurringExpense, Review
 from app.models.enums import AdjustmentKind, Currency, SuggestionKind
@@ -27,6 +26,7 @@ from app.services.adjustments import (
 )
 from app.services.budgets import budget_for, budgets_in, spent_in
 from app.services.money import converter_for, round_money, round_to_thousand
+from app.services.outside import Outside
 from app.services.recurring_expenses import (
     last_amount_paid,
     list_recurring_expenses,
@@ -161,12 +161,12 @@ async def _index_variations(
 
 
 async def propose_recurring_expenses(
-    db: AsyncSession, review: Review, clock: Clock, indexes: IndexProvider
+    db: AsyncSession, review: Review, outside: Outside
 ) -> None:
     """One `add_transaction` per active Recurring Expense, for the month."""
     month = review.month
     templates = [one for one in await list_recurring_expenses(db) if one.is_active]
-    variations = await _index_variations(indexes, templates, month)
+    variations = await _index_variations(outside.indexes, templates, month)
     for template in templates:
         on = _expected_date(template, month)
         paid = await last_amount_paid(db, template)
@@ -219,7 +219,7 @@ def _budget_rationale(
 
 
 async def propose_budget_adjustments(
-    db: AsyncSession, review: Review, clock: Clock, indexes: IndexProvider
+    db: AsyncSession, review: Review, outside: Outside
 ) -> None:
     """
     One `set_budget` per ARS Budget of last month, moved by the latest IPC.
@@ -240,11 +240,11 @@ async def propose_budget_adjustments(
     ]
     if not budgets:
         return
-    index = await _latest_published(indexes, month)
+    index = await _latest_published(outside.indexes, month)
     if index is None:
         return
 
-    converter = await converter_for(db, clock)
+    converter = await converter_for(db, outside.clock)
     factor = 1 + index.value / HUNDRED
     for budget in budgets:
         proposed = round_to_thousand(budget.amount * factor)

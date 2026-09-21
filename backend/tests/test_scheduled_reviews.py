@@ -9,8 +9,12 @@ that was down costs nothing but a slower first read. Moving the fixed clock is
 what makes a month pass.
 """
 
+from app.models.enums import MANUAL_TRIGGERS
 from tests.test_recurring_expenses import create_recurring
 from tests.test_reviews import inbox, run_review, suggestions
+
+# What "Revisar ahora" creates, which is the opposite of scheduled.
+ASKED_FOR = [one.value for one in MANUAL_TRIGGERS]
 
 
 async def reviews(client) -> list[dict]:
@@ -24,7 +28,7 @@ async def scheduled(client, trigger: str | None = None) -> list[dict]:
     return [
         one
         for one in await reviews(client)
-        if one["trigger"] != "manual" and trigger in (None, one["trigger"])
+        if one["trigger"] not in ASKED_FOR and trigger in (None, one["trigger"])
     ]
 
 

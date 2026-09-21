@@ -13,6 +13,7 @@ from app.clock import Clock, get_clock
 from app.database import get_db
 from app.queue import ReviewQueue, get_review_queue
 from app.schemas.review import Inbox, InboxSuggestion
+from app.services.insights import waiting_in
 from app.services.reviews import ensure_scheduled_reviews, waiting_reviews
 from app.services.suggestions import (
     expire_overdue_suggestions,
@@ -41,5 +42,6 @@ async def read_inbox(
             for one in pending
         ],
         pending_count=len(pending),
+        insights=await waiting_in(db, clock.today()),
         reviews=await waiting_reviews(db),
     )

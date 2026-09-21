@@ -2,16 +2,21 @@
 The one seam these tests drive is the HTTP API.
 
 Every test talks to the FastAPI app over httpx against a real Postgres database
-migrated to head, and asserts only on responses. The only fakes are at the
-edges, through dependency overrides: a fixed clock, a fixed source of dollar
-rates, a fixed source of inflation index values, and a queue that runs Reviews
-in-process instead of through Redis.
+migrated to head, and asserts on responses. The only fakes are at the edges,
+through dependency overrides: a fixed clock, a fixed source of dollar rates, a
+fixed source of inflation index values, a scripted model, and a queue that runs
+Reviews in-process instead of through Redis.
+
+The scripted model is the one fake a test also reads back, because what the app
+sent to Claude is behaviour no response can show and the core brief is the
+whole of what a Review knows. Nothing else here is asserted on from the inside.
 """
 
 import asyncio
 import os
 import subprocess
 import sys
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -25,6 +30,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.clock import Clock, get_clock
 from app.database import get_db
 from app.inflation import IPC, IndexUnavailable, get_index_source
+from app.llm import LLMUnavailable, Reply, ToolCall
 from app.main import app
 from app.models.enums import RateType, ReviewTrigger
 from app.queue import get_review_queue
@@ -107,6 +113,72 @@ class FixedIndexSource:
         return list(self.points)
 
 
+class ScriptedLLM:
+    """
+    Stands in for the Claude Messages API, saying exactly what a test wants.
+
+    It answers with the replies it was given, in order, and repeats the last
+    one for ever after, so a loop that asks one turn too many is answered
+    rather than left hanging. Everything it was sent is kept: `brief` is the
+    first thing the last run was told, which is what the core brief is.
+
+    `says` is the ordinary case — record these Insights, then stop — written
+    the way it reads: what the model would do, not which content blocks it
+    would do it in.
+    """
+
+    def __init__(self):
+        self.replies: list[Reply] = [Reply(text="No veo nada para marcar.")]
+        self.runs: list[list[dict]] = []
+        self.systems: list[str] = []
+        self.failure: tuple[str, int] | None = None
+
+    def says(self, *insights: tuple[str, str], then: str = "Listo.") -> None:
+        """Record one Insight per (topic, body), then answer and stop."""
+        self.replies = [
+            Reply(
+                text="",
+                tool_calls=tuple(
+                    ToolCall(
+                        id=f"call-{number}",
+                        name="record_insight",
+                        arguments={"topic": topic, "body": body},
+                    )
+                    for number, (topic, body) in enumerate(insights)
+                ),
+                input_tokens=1200,
+                output_tokens=300,
+            ),
+            Reply(text=then, input_tokens=1400, output_tokens=20),
+        ]
+
+    def will(self, *replies: Reply) -> None:
+        """The turns, exactly as the test wants them."""
+        self.replies = list(replies)
+
+    def fail_with(self, message: str, after: int = 0) -> None:
+        """
+        The model stops answering, at once or once `after` turns have gone by.
+
+        Failing partway through is the case worth writing: the turns before it
+        are delivered and do their work, and what they did has to disappear
+        with the run that failed.
+        """
+        self.failure = (message, after)
+
+    @property
+    def brief(self) -> str:
+        """The core brief of the last run: the first thing it was sent."""
+        return self.runs[-1][0]["content"]
+
+    async def reply(self, system: str, messages: list[dict], tools: list[dict]):
+        self.systems.append(system)
+        self.runs.append(deepcopy(messages))
+        if self.failure is not None and len(self.runs) > self.failure[1]:
+            raise LLMUnavailable(self.failure[0])
+        return self.replies[0] if len(self.replies) == 1 else self.replies.pop(0)
+
+
 class EagerReviewQueue:
     """
     The worker, run in-process: no Redis, and the Review is done on return.
@@ -116,10 +188,11 @@ class EagerReviewQueue:
     `break_with` for a producer that raises.
     """
 
-    def __init__(self, sessionmaker, clock: Clock, index_source):
+    def __init__(self, sessionmaker, clock: Clock, index_source, llm):
         self._sessionmaker = sessionmaker
         self._clock = clock
         self._index_source = index_source
+        self._llm = llm
         self._producers = PRODUCERS
         self._held = False
 
@@ -128,7 +201,7 @@ class EagerReviewQueue:
         self._held = True
 
     def break_with(self, message: str) -> None:
-        async def explode(db, review, clock, indexes):
+        async def explode(db, review, outside):
             raise RuntimeError(message)
 
         self._producers = {trigger: [explode] for trigger in ReviewTrigger}
@@ -143,6 +216,7 @@ class EagerReviewQueue:
                 self._clock,
                 self._producers,
                 self._index_source,
+                self._llm,
             )
 
 
@@ -251,14 +325,22 @@ def index_source() -> FixedIndexSource:
 
 
 @pytest.fixture
-async def queue(engine, clock, index_source) -> EagerReviewQueue:
+def llm() -> ScriptedLLM:
+    return ScriptedLLM()
+
+
+@pytest.fixture
+async def queue(engine, clock, index_source, llm) -> EagerReviewQueue:
     return EagerReviewQueue(
-        async_sessionmaker(engine, expire_on_commit=False), clock, index_source
+        async_sessionmaker(engine, expire_on_commit=False),
+        clock,
+        index_source,
+        llm,
     )
 
 
 @pytest.fixture
-async def client(clean_database, engine, clock, rate_source, index_source, queue):
+async def client(clean_database, engine, clock, rate_source, index_source, llm, queue):
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 
     async def override_get_db():

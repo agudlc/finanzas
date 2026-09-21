@@ -1,5 +1,5 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { RefreshCw } from 'lucide-react';
+import { createFileRoute, Link } from '@tanstack/react-router';
+import { History, RefreshCw } from 'lucide-react';
 
 import InsightCard from '@/components/inbox/InsightCard';
 import SuggestionCard from '@/components/inbox/SuggestionCard';
@@ -40,14 +40,21 @@ function Bandeja() {
     <div className="flex w-full max-w-3xl flex-col gap-10">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <PageTitle>Bandeja</PageTitle>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={run.isPending || working}
-          onClick={() => run.mutate(undefined)}
-        >
-          <RefreshCw /> Revisar ahora
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Where a proposal came from: the run that made it, and what it
+              was told. The Inbox itself says nothing about the runs. */}
+          <Button variant="ghost" size="sm" render={<Link to="/revisiones" />}>
+            <History /> Revisiones
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={run.isPending || working}
+            onClick={() => run.mutate(undefined)}
+          >
+            <RefreshCw /> Revisar ahora
+          </Button>
+        </div>
       </header>
 
       <ErrorText error={inbox.error ?? run.error} />

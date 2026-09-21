@@ -84,6 +84,21 @@ async def recent(db: AsyncSession, month: Date, earliest: Date) -> list[Insight]
     return await between(db, first, month)
 
 
+async def of_review(db: AsyncSession, review_id: uuid.UUID) -> list[Insight]:
+    """
+    What one Review recorded, in the order it recorded it.
+
+    Dismissed or not, and whatever month it is now: this is the run being read
+    back, not the Inbox.
+    """
+    result = await db.execute(
+        select(Insight)
+        .where(Insight.review_id == review_id)
+        .order_by(Insight.created_at)
+    )
+    return list(result.scalars().all())
+
+
 async def get_insight(db: AsyncSession, insight_id: uuid.UUID) -> Insight:
     insight = await db.get(Insight, insight_id)
     if insight is None:

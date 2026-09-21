@@ -17,13 +17,19 @@ refused by the tool rather than fetched. Everything the run leaves behind
 beyond the Insights and the Suggestions — the transcript, what it cost, which
 prompt asked for it — is written on the Review, so a strange observation can be
 read back to the conversation that produced it.
+
+The one thing the loop insists on is ending. It stops after ten turns and keeps
+whatever those turns produced, and it asks a busy API again rather than losing a
+Review to a 429. Anything else that goes wrong ends the run there and leaves the
+error on the Review, because a Review that quietly half-ran is worse than one
+that says it failed.
 """
 
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.llm import Reply, ToolCall
+from app.llm import LLMUnavailable, Reply, ToolCall
 from app.models import Review
 from app.services import insights as insights_service
 from app.services.agent_proposals import (
@@ -43,6 +49,12 @@ PROMPT_VERSION = "2026-09-d"
 # The brief is already complete and the tools only fill in around it, so a run
 # that has not finished in ten turns is looping rather than working.
 MAX_TURNS = 10
+
+# How long a turn waits before asking again when the API says it is busy: two
+# waits, so three asks, and then the Review fails with what the API last said.
+# Anything that is not the API being busy is not retried at all — a key that is
+# missing stays missing, and a request the API refused would be refused again.
+RETRY_DELAYS = (1.0, 4.0)
 
 RECORD_INSIGHT = "record_insight"
 
@@ -170,7 +182,7 @@ async def review_with_agent(
     reading = await Reading.of(db, review, outside.clock)
 
     for _ in range(MAX_TURNS):
-        reply = await outside.llm.reply(SYSTEM_PROMPT, messages, TOOLS)
+        reply = await _ask(outside, messages)
         # Added up across turns, so the input count is the brief once per turn
         # rather than once per run. That is deliberate: this is what the run
         # cost, and every turn is billed for the whole conversation it resends.
@@ -184,6 +196,28 @@ async def review_with_agent(
         review.note = HIT_THE_CAP
 
     review.transcript = messages
+
+
+async def _ask(outside: Outside, messages: list[dict]) -> Reply:
+    """
+    One turn, asked again while the API is only busy.
+
+    A 429 or a 529 says "not now", and the conversation so far is still good:
+    the same turn is sent again after waiting, and only when the waits run out
+    does the run fail. Every other failure is raised on the first try, because
+    the second would fail the same way and the user would wait for nothing.
+    """
+    waits = iter(RETRY_DELAYS)
+    while True:
+        try:
+            return await outside.llm.reply(SYSTEM_PROMPT, messages, TOOLS)
+        except LLMUnavailable as unavailable:
+            if not unavailable.transient:
+                raise
+            delay = next(waits, None)
+            if delay is None:
+                raise
+            await outside.sleep(delay)
 
 
 @dataclass(frozen=True)

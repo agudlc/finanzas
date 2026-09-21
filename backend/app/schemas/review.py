@@ -31,20 +31,17 @@ class ReviewResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ReviewDetail(ReviewResponse):
+class ReviewSummary(ReviewResponse):
     """
-    One Review, and what the run actually was.
+    One Review in the history: how the run went, and what it cost.
 
-    None of this is in the list or the Inbox, which are polled: the whole
-    exchange with the model, what it cost and which prompt asked for it are
-    read when one Review needs explaining. All null on a deterministic Review,
-    which talked to nobody.
+    The tokens are here and the transcript is not. Two numbers are what the
+    list is for — a run that cost ten times the others is worth opening — and
+    the exchange itself is megabytes nobody reads a page of.
     """
 
-    transcript: list | None
     input_tokens: int | None
     output_tokens: int | None
-    prompt_version: str | None
 
 
 class AddTransactionPayload(BaseModel):
@@ -291,6 +288,25 @@ class InsightResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ReviewDetail(ReviewSummary):
+    """
+    One Review read in full: the whole exchange, and what came out of it.
+
+    This is the only place the transcript is served, because it is the only
+    question it answers — a Suggestion that reads oddly or an Insight that
+    seems to come from nowhere can be traced to the turn that produced it.
+    The proposals are here whatever became of them, and so are the Insights
+    whatever month it is now: this is history, not the Inbox. All of the
+    agent's own fields are null on a deterministic Review, which talked to
+    nobody.
+    """
+
+    transcript: list | None
+    prompt_version: str | None
+    suggestions: list[SuggestionResponse]
+    insights: list[InsightResponse]
 
 
 class Inbox(BaseModel):

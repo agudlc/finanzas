@@ -29,6 +29,8 @@ import type {
   MonthlySummary,
   RecurringExpense,
   Review,
+  ReviewDetail,
+  ReviewSummary,
   Settings,
   Suggestion,
   SuggestionEdits,
@@ -49,6 +51,8 @@ export const keys = {
   rules: ['categorization-rules'] as const,
   imports: ['imports'] as const,
   inbox: ['inbox'] as const,
+  reviews: ['reviews'] as const,
+  review: (id: string) => ['reviews', id] as const,
   inflation: (params: Record<string, string | undefined> = {}) =>
     ['inflation-indexes', params] as const,
 };
@@ -92,6 +96,7 @@ const RULES = [[...keys.rules]];
 const SETTINGS = [[...keys.settings], ...MONEY];
 const RECURRING = [[...keys.recurring]];
 const INBOX = [[...keys.inbox]];
+const REVIEWS = [[...keys.reviews]];
 const INFLATION = [['inflation-indexes']];
 
 export function useCategories() {
@@ -389,7 +394,39 @@ export function useInbox() {
  * when the model cannot be reached.
  */
 export function useRunReview() {
-  return useWrite(() => api.post<Review[]>('/reviews/', {}), INBOX);
+  return useWrite(() => api.post<Review[]>('/reviews/', {}), [
+    ...INBOX,
+    ...REVIEWS,
+  ]);
+}
+
+/**
+ * The Reviews history: every run, newest first.
+ *
+ * Polled while one is still going, for the same reason the Inbox is — the run
+ * happens in the worker and nothing tells the screen when it finishes — and
+ * left alone once they have all ended, because history does not move.
+ */
+export function useReviews() {
+  return useQuery({
+    queryKey: keys.reviews,
+    queryFn: () => api.get<ReviewSummary[]>('/reviews/'),
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some(
+        (one) => one.status === 'queued' || one.status === 'running',
+      )
+        ? 1500
+        : false,
+  });
+}
+
+/** One run in full, read only when the user opens it. */
+export function useReview(id: string | null) {
+  return useQuery({
+    queryKey: keys.review(id ?? ''),
+    queryFn: () => api.get<ReviewDetail>(`/reviews/${id}`),
+    enabled: id !== null,
+  });
 }
 
 /** "Leído": the observation leaves the Inbox and stays as history. */

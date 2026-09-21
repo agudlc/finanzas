@@ -18,7 +18,12 @@ export type ReviewTrigger =
   | 'manual'
   | 'manual_agent';
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed';
-export type SuggestionKind = 'add_transaction' | 'set_budget';
+export type SuggestionKind =
+  | 'add_transaction'
+  | 'set_budget'
+  | 'recategorize_transaction'
+  | 'add_categorization_rule'
+  | 'add_recurring_expense';
 export type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
 export type IndexOrigin = 'api' | 'manual';
 
@@ -230,6 +235,59 @@ export interface Review {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+/** A Review in the history: how the run went, and what it cost. */
+export interface ReviewSummary extends Review {
+  /** Null on a deterministic Review, which called nobody. */
+  input_tokens: number | null;
+  output_tokens: number | null;
+}
+
+/**
+ * One turn of the exchange with the model, as it was sent.
+ *
+ * The first is the brief, which is plain text; everything after it is the
+ * blocks of one turn — what was said, which tools were called, what they
+ * answered.
+ */
+export interface TranscriptTurn {
+  role: 'user' | 'assistant';
+  content: string | TranscriptBlock[];
+}
+
+export type TranscriptBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+
+/**
+ * One Review read in full: the exchange it was, and what came out of it.
+ *
+ * The proposals are here whatever became of them and the observations whatever
+ * month it is now: this is the run as history, not the Inbox.
+ */
+export interface ReviewDetail extends ReviewSummary {
+  transcript: TranscriptTurn[] | null;
+  prompt_version: string | null;
+  suggestions: ProducedSuggestion[];
+  insights: Insight[];
+}
+
+/**
+ * A proposal as the history shows it: what kind it was, and what came of it.
+ *
+ * The payload is left unread here — the Inbox is where a proposal is acted on,
+ * and the history only says that it was made.
+ */
+export interface ProducedSuggestion {
+  id: string;
+  kind: SuggestionKind;
+  month: string;
+  rationale: string;
+  status: SuggestionStatus;
+  rejection_reason: string | null;
+  created_at: string;
 }
 
 /** What an `add_transaction` Suggestion would record. */

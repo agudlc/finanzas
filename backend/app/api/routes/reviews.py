@@ -8,8 +8,10 @@ from app.database import get_db
 from app.models.enums import MANUAL_TRIGGERS
 from app.months import month_of
 from app.queue import ReviewQueue, get_review_queue
-from app.schemas.review import ReviewDetail, ReviewResponse
+from app.schemas.review import ReviewDetail, ReviewResponse, ReviewSummary
+from app.services import insights as insights_service
 from app.services import reviews as service
+from app.services import suggestions as suggestions_service
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
@@ -36,11 +38,20 @@ async def create_review(
     return created
 
 
-@router.get("/", response_model=list[ReviewResponse])
+@router.get("/", response_model=list[ReviewSummary])
 async def list_reviews(db: AsyncSession = Depends(get_db)):
+    """The history: the most recent runs, newest first."""
     return await service.list_reviews(db)
 
 
 @router.get("/{review_id}", response_model=ReviewDetail)
 async def get_review(review_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    return await service.get_review(db, review_id)
+    """One run in full: the exchange it was, and everything it left behind."""
+    review = await service.get_review(db, review_id)
+    return {
+        **ReviewSummary.model_validate(review).model_dump(),
+        "transcript": review.transcript,
+        "prompt_version": review.prompt_version,
+        "suggestions": await suggestions_service.of_review(db, review.id),
+        "insights": await insights_service.of_review(db, review.id),
+    }

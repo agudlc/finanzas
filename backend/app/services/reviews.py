@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
+from app.inflation import IndexProvider, IndexSource, get_index_source
 from app.models import Review
 from app.models.enums import SCHEDULED_TRIGGERS, ReviewStatus, ReviewTrigger
 from app.months import month_of
@@ -31,8 +32,11 @@ from app.services.producers import propose_recurring_expenses
 
 # A producer is given the Review it is producing for: the month to propose for
 # is the Review's, not today's, so a run that starts after midnight still does
-# the month it was created for.
-Producer = Callable[[AsyncSession, Review, Clock], Awaitable[None]]
+# the month it was created for. The Inflation Index comes with it, because
+# reading it is the one thing a producer cannot work out on its own.
+Producer = Callable[
+    [AsyncSession, Review, Clock, IndexProvider], Awaitable[None]
+]
 
 # What each trigger runs. A manual Review runs everything the user could be
 # waiting for, and the dedupe keys keep that from stepping on the scheduled runs.
@@ -139,9 +143,11 @@ async def run_review(
     review_id: uuid.UUID,
     clock: Clock,
     producers: dict[ReviewTrigger, list[Producer]] | None = None,
+    index_source: IndexSource | None = None,
 ) -> Review:
     """Run what the Review's trigger asks for, and record how it went."""
     producers = PRODUCERS if producers is None else producers
+    indexes = IndexProvider(db, index_source or get_index_source(), clock)
     review = await get_review(db, review_id)
     review.status = ReviewStatus.running
     review.started_at = datetime.now(UTC)
@@ -149,7 +155,7 @@ async def run_review(
 
     try:
         for produce in producers[review.trigger]:
-            await produce(db, review, clock)
+            await produce(db, review, clock, indexes)
         await db.commit()
     except Exception as error:
         # Nothing half-proposed survives a failed run.

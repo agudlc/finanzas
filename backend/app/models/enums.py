@@ -58,6 +58,14 @@ class IndexOrigin(str, enum.Enum):
     manual = "manual"
 
 
+class AdjustmentKind(str, enum.Enum):
+    """How an Adjustment Rule moves a Recurring Expense's amount."""
+
+    none = "none"
+    percentage = "percentage"
+    index = "index"
+
+
 class BudgetState(str, enum.Enum):
     """How a Budget's spending stands against its amount and its Pace."""
 

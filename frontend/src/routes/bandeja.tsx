@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Empty, ErrorText, PageTitle } from '@/components/ui/field';
 import { monthName } from '@/lib/format';
 import { useCategories, useInbox, useRunReview } from '@/lib/queries';
-import type { Suggestion } from '@/lib/types';
+import type { InboxSuggestion } from '@/lib/types';
 
 export const Route = createFileRoute('/bandeja')({
   component: Bandeja,
@@ -76,8 +76,10 @@ function Bandeja() {
 }
 
 /** The months that have something pending, newest first. */
-function groupByMonth(suggestions: Suggestion[]): [string, Suggestion[]][] {
-  const months = new Map<string, Suggestion[]>();
+function groupByMonth(
+  suggestions: InboxSuggestion[],
+): [string, InboxSuggestion[]][] {
+  const months = new Map<string, InboxSuggestion[]>();
   for (const suggestion of suggestions) {
     const month = suggestion.month.slice(0, 7);
     months.set(month, [...(months.get(month) ?? []), suggestion]);

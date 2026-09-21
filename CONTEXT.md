@@ -118,6 +118,10 @@ _Avoid_: Tip, alert, notification
 A change a Review proposes (for example recategorizing a Transaction). Every Suggestion is one of a fixed set of kinds, each describing one shape of change the app knows how to apply; anything that does not fit a kind is an Insight instead. It is pending until the user accepts it (possibly after editing any part of what it proposes), rejects it (optionally with a reason), or it expires. Every Suggestion is about one month and stops being offered once acting on it no longer makes sense, so rejecting one means "not this month" rather than "never": the same proposal can return next month. Rejections are remembered and inform later Reviews.
 _Avoid_: Recommendation, action
 
+**Possible Match**:
+A Transaction that may already be the payment a Recurring Expense's Suggestion proposes: same Category, same month, same currency and about the same amount, and not itself linked to a Recurring Expense. It is worked out whenever the Inbox is read and shown next to the Suggestion, which stays pending whether or not one was found — the app never retracts a proposal on a guess.
+_Avoid_: Duplicate, conflict, candidate
+
 **Inbox**:
 The place where pending Suggestions and recent Insights wait for the user. Chat is a secondary way to discuss them.
 _Avoid_: Feed, notifications, coach

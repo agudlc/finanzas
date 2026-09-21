@@ -18,17 +18,22 @@ without its Transaction, nor the other way round.
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date as Date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
-from app.models import Suggestion
+from app.models import Suggestion, Transaction
 from app.models.enums import SuggestionKind, SuggestionStatus, TransactionType
 from app.months import last_day_of_month, month_of
 from app.schemas.budget import BudgetCreate
-from app.schemas.review import AddTransactionPayload, SetBudgetPayload
+from app.schemas.review import (
+    AddTransactionPayload,
+    PossibleMatch,
+    SetBudgetPayload,
+)
 from app.schemas.transaction import TransactionCreate
 from app.services.budgets import set_budget
 from app.services.errors import Conflict, Invalid, NotFound
@@ -109,6 +114,68 @@ async def pending_suggestions(db: AsyncSession) -> list[Suggestion]:
         .order_by(Suggestion.month.desc(), Suggestion.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+# How far an already recorded amount may sit from the proposed one and still
+# be taken for the same payment, as a share of what was proposed. Rent that
+# arrives through an Import rarely lands on the peso the template expected, and
+# a tenth is loose enough for that while staying well short of the month's
+# other expenses.
+SIMILAR_AMOUNT_MARGIN = Decimal("0.10")
+
+
+async def possible_matches(
+    db: AsyncSession, suggestions: list[Suggestion]
+) -> dict[uuid.UUID, PossibleMatch]:
+    """
+    The Possible Match of each proposal that has one, by Suggestion id.
+
+    This is worked out on every read rather than stored, because it is an
+    answer about the Transactions there are right now: a proposal made on the
+    1st should mention the rent an Import brought in on the 12th. It stays a
+    hint — nothing here resolves anything — so the worst a wrong guess costs is
+    a sentence the user ignores.
+
+    Only an `add_transaction` proposes a payment, so only one of those can have
+    a Possible Match; a Budget is not something an Import can have recorded.
+    """
+    matches = {}
+    for suggestion in suggestions:
+        if suggestion.kind is not SuggestionKind.add_transaction:
+            continue
+        found = await _possible_match(db, suggestion)
+        if found is not None:
+            matches[suggestion.id] = PossibleMatch.model_validate(found)
+    return matches
+
+
+async def _possible_match(
+    db: AsyncSession, suggestion: Suggestion
+) -> Transaction | None:
+    """
+    The Expense of the month that most looks like the one being proposed.
+
+    Same Category — which settles that it is an Expense, since a Category can
+    only classify its own type — same month, same currency and about the same
+    amount, and not already linked to a Recurring Expense, because such an
+    Expense is another template's payment, or this template's for a month
+    already dealt with, and either way not the one waiting here. When several
+    fit, the closest amount is the likeliest to be it.
+    """
+    proposed = _validated(AddTransactionPayload, suggestion.payload)
+    month = month_of(suggestion.month)
+    distance = func.abs(Transaction.amount - proposed.amount)
+    result = await db.execute(
+        select(Transaction)
+        .where(Transaction.category_id == proposed.category_id)
+        .where(Transaction.currency == proposed.currency)
+        .where(Transaction.date.between(month, last_day_of_month(month)))
+        .where(Transaction.recurring_expense_id.is_(None))
+        .where(distance <= proposed.amount * SIMILAR_AMOUNT_MARGIN)
+        .order_by(distance)
+        .limit(1)
+    )
+    return result.scalars().first()
 
 
 async def get_suggestion(db: AsyncSession, suggestion_id: uuid.UUID) -> Suggestion:

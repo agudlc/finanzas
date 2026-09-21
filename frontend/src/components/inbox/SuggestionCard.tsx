@@ -17,6 +17,8 @@ import { useAcceptSuggestion, useRejectSuggestion } from '@/lib/queries';
 import type {
   Category,
   Currency,
+  InboxSuggestion,
+  PossibleMatch,
   SetBudgetPayload,
   Suggestion,
   SuggestionEdits,
@@ -39,7 +41,7 @@ export default function SuggestionCard({
   categories = [],
   category,
 }: {
-  suggestion: Suggestion;
+  suggestion: InboxSuggestion;
   categories?: Category[];
   category?: Category;
 }) {
@@ -70,6 +72,10 @@ export default function SuggestionCard({
       <p className="tag">{said.detail}</p>
 
       <p className="text-sm text-ink-mute">{suggestion.rationale}</p>
+
+      {suggestion.possible_match && (
+        <AlreadyRecorded match={suggestion.possible_match} />
+      )}
 
       <ErrorText error={accept.error ?? rejection.error} />
 
@@ -120,6 +126,25 @@ export default function SuggestionCard({
         </div>
       )}
     </article>
+  );
+}
+
+/**
+ * The Possible Match, said and left there.
+ *
+ * It is a resemblance, not a finding, so the card keeps every button it had —
+ * accepting anyway is a perfectly good answer, and so is "no este mes". What
+ * the user needs to tell the rent already recorded from something that merely
+ * costs the same is the amount, the day and the description it came in with.
+ */
+function AlreadyRecorded({ match }: { match: PossibleMatch }) {
+  return (
+    <p className="rounded-lg border border-dashed border-rule px-3 py-2 text-sm text-ink-mute">
+      Puede que ya lo hayas registrado:{' '}
+      <span className="num">{money(match.amount, match.currency)}</span> el{' '}
+      {longDay(match.date)}
+      {match.description ? ` · ${match.description}` : ''}
+    </p>
   );
 }
 

@@ -97,6 +97,37 @@ class SuggestionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PossibleMatch(BaseModel):
+    """
+    A Transaction that may already be the payment a Suggestion proposes.
+
+    Enough of it to recognise the payment and no more: the Inbox shows it so
+    the user can tell "that is the rent, already recorded" from "that is
+    something else that happens to cost the same".
+    """
+
+    id: uuid.UUID
+    description: str | None
+    amount: Decimal
+    currency: Currency
+    date: Date
+
+    model_config = {"from_attributes": True}
+
+
+class InboxSuggestion(SuggestionResponse):
+    """
+    A pending proposal as the Inbox hands it over, with its Possible Match.
+
+    Only the Inbox answers this, because the match is about the Transactions of
+    the moment it was read; accepting and rejecting hand back the proposal
+    alone. It is a hint either way: the proposal is pending whether or not one
+    was found.
+    """
+
+    possible_match: PossibleMatch | None = None
+
+
 class SuggestionAccept(BaseModel):
     """
     "Sí, pero así": the fields of the payload the user changed, if any.
@@ -117,7 +148,7 @@ class SuggestionReject(BaseModel):
 class Inbox(BaseModel):
     """Everything the Inbox screen needs in one read."""
 
-    suggestions: list[SuggestionResponse]
+    suggestions: list[InboxSuggestion]
     pending_count: int
     # The Reviews queued or running right now, so the screen can say "buscando"
     # and poll faster until they finish.

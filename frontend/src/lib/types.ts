@@ -244,6 +244,15 @@ export interface SetBudgetPayload {
   currency: Currency;
 }
 
+/** A Transaction that may already be the payment a Suggestion proposes. */
+export interface PossibleMatch {
+  id: string;
+  description: string | null;
+  amount: string;
+  currency: Currency;
+  date: string;
+}
+
 interface ProposedChange {
   id: string;
   review_id: string;
@@ -268,13 +277,27 @@ export type Suggestion =
   | (ProposedChange & { kind: 'add_transaction'; payload: AddTransactionPayload })
   | (ProposedChange & { kind: 'set_budget'; payload: SetBudgetPayload });
 
+/**
+ * A proposal as the Inbox hands it over, with its Possible Match.
+ *
+ * Only the Inbox answers this, because the match is about the Transactions of
+ * the moment it was read; accepting and rejecting hand back the proposal alone.
+ */
+export type InboxSuggestion = Suggestion & {
+  /**
+   * An Expense already recorded that may be this same payment. A hint only:
+   * the proposal is pending whether or not one was found.
+   */
+  possible_match: PossibleMatch | null;
+};
+
 /** The fields of a proposal the user changed before accepting it. */
 export type SuggestionEdits =
   | Partial<AddTransactionPayload>
   | Partial<SetBudgetPayload>;
 
 export interface Inbox {
-  suggestions: Suggestion[];
+  suggestions: InboxSuggestion[];
   pending_count: number;
   /** The Reviews queued or running right now. */
   reviews: Review[];

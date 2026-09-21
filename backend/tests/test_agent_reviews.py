@@ -278,3 +278,84 @@ async def test_the_brief_carries_what_the_agent_already_said_this_month(client, 
     assert "Delivery: Se te fue la mano con el delivery." in llm.brief, (
         "it is told what it has already said so it does not say it again"
     )
+
+
+async def test_a_busy_api_is_asked_again_and_the_run_finishes(client, llm, sleeper):
+    llm.is_busy(2)
+    llm.says(("Delivery", "Se te fue la mano con el delivery."))
+
+    review = await finished(client, await agent_review(client))
+
+    assert review["status"] == "done"
+    assert [one["topic"] for one in await insights(client)] == ["Delivery"]
+    assert sleeper.waited == [1.0, 4.0], "it waited longer each time before asking"
+
+
+async def test_an_api_that_stays_busy_leaves_the_review_failed(client, llm, sleeper):
+    llm.is_busy(3)
+    llm.says(("Delivery", "Se te fue la mano con el delivery."))
+
+    review = await finished(client, await agent_review(client))
+
+    assert review["status"] == "failed"
+    assert "overloaded" in review["error"]
+    assert sleeper.waited == [1.0, 4.0], "three asks, and it gave up rather than loop"
+
+
+async def test_an_error_that_is_not_the_api_being_busy_is_not_retried(
+    client, llm, sleeper
+):
+    llm.fail_with("the model did not answer: invalid request")
+
+    review = await finished(client, await agent_review(client))
+
+    assert review["status"] == "failed"
+    assert "invalid request" in review["error"]
+    assert len(llm.runs) == 1, "asking again would have been refused again"
+    assert sleeper.waited == []
+
+
+async def test_without_an_api_key_the_agent_review_fails_at_once(
+    client, llm, sleeper
+):
+    llm.without_key()
+
+    review = await finished(client, await agent_review(client))
+
+    assert review["status"] == "failed"
+    assert "ANTHROPIC_API_KEY is not set" in review["error"]
+    assert len(llm.runs) == 1, "there is nothing to wait for"
+    assert sleeper.waited == []
+
+
+async def test_a_run_that_was_cut_off_keeps_what_it_proposed(client, llm):
+    supermercado = await default_category(client, "Supermercado", "expense")
+    delivery = await default_category(client, "Delivery", "expense")
+    expense = await create_transaction(
+        client,
+        category_id=supermercado["id"],
+        amount="45000.00",
+        description="Pedidos Ya",
+    )
+    llm.will(
+        Reply(
+            tool_calls=(
+                ToolCall(
+                    id="call-0",
+                    name="propose_recategorize_transaction",
+                    arguments={
+                        "transaction_id": expense["id"],
+                        "category_id": delivery["id"],
+                        "rationale": "Pedidos Ya es delivery, no supermercado.",
+                    },
+                ),
+            )
+        )
+    )
+
+    review = await finished(client, await agent_review(client))
+
+    assert review["note"] == "hit the iteration cap"
+    assert [one["kind"] for one in await suggestions(client)] == [
+        "recategorize_transaction"
+    ], "the proposal the first turn made outlived the cap"

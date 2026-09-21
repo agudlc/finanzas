@@ -1,6 +1,15 @@
 /** Argentine formatting. The UI speaks Spanish and writes numbers es-AR. */
 
-import type { BudgetState, Currency, RateType, RowStatus } from '@/lib/types';
+import type {
+  BudgetState,
+  Currency,
+  RateType,
+  ReviewStatus,
+  ReviewTrigger,
+  RowStatus,
+  SuggestionKind,
+  SuggestionStatus,
+} from '@/lib/types';
 
 const MONTHS = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
@@ -79,6 +88,21 @@ export function monthName(month: string): string {
   return `${MONTHS[number - 1]} ${year}`;
 }
 
+/** A moment as the API writes it, read the way a log is: "15 mar, 14:32". */
+export function timestamp(at: string): string {
+  const date = new Date(at);
+  const time = date.toLocaleTimeString('es-AR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `${date.getDate()} ${MONTHS[date.getMonth()].slice(0, 3)}, ${time}`;
+}
+
+/** A plain whole number, es-AR: "12.400". */
+export function quantity(value: number): string {
+  return new Intl.NumberFormat('es-AR').format(value);
+}
+
 export function monthKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
@@ -118,4 +142,45 @@ export const ROW_STATUS_LABEL: Record<RowStatus, string> = {
   duplicate: 'duplicada',
   ignored: 'ignorada',
   needs_category: 'falta categoría',
+};
+
+export const REVIEW_TRIGGER_LABEL: Record<ReviewTrigger, string> = {
+  recurring_monthly: 'gastos recurrentes',
+  month_end: 'cierre de mes',
+  manual: 'a pedido',
+  manual_agent: 'a pedido',
+};
+
+export const REVIEW_STATUS_LABEL: Record<ReviewStatus, string> = {
+  queued: 'en cola',
+  running: 'corriendo',
+  done: 'lista',
+  failed: 'falló',
+};
+
+export const SUGGESTION_KIND_LABEL: Record<SuggestionKind, string> = {
+  add_transaction: 'registrar un gasto',
+  set_budget: 'cambiar un presupuesto',
+  recategorize_transaction: 'cambiar de categoría',
+  add_categorization_rule: 'aprender una regla',
+  add_recurring_expense: 'crear un gasto recurrente',
+};
+
+/**
+ * What a Review says about itself, in Spanish.
+ *
+ * The note is written by the backend in English, for the log it also is. The
+ * list is chrome, so the ones the app can produce are said in Spanish here and
+ * anything unrecognised falls back to what was written — a note nobody has
+ * translated yet is still better shown than swallowed.
+ */
+export const REVIEW_NOTE_LABEL: Record<string, string> = {
+  'hit the iteration cap': 'cortada por el límite de turnos',
+};
+
+export const SUGGESTION_STATUS_LABEL: Record<SuggestionStatus, string> = {
+  pending: 'pendiente',
+  accepted: 'aceptada',
+  rejected: 'rechazada',
+  expired: 'vencida',
 };

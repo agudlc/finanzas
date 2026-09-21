@@ -13,6 +13,7 @@ starts them. The 1st is when they should happen, not the only moment they can,
 so opening the Inbox catches up on any the worker missed.
 """
 
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date as Date, datetime, timedelta
@@ -35,7 +36,7 @@ from app.months import month_of
 from app.queue import ReviewQueue
 from app.services.agent import review_with_agent
 from app.services.errors import NotFound
-from app.services.outside import Outside
+from app.services.outside import Outside, Sleep
 from app.services.producers import (
     propose_budget_adjustments,
     propose_recurring_expenses,
@@ -164,6 +165,7 @@ async def run_review(
     producers: dict[ReviewTrigger, list[Producer]] | None = None,
     index_source: IndexSource | None = None,
     llm: LLMClient | None = None,
+    sleep: Sleep = asyncio.sleep,
 ) -> Review:
     """Run what the Review's trigger asks for, and record how it went."""
     producers = PRODUCERS if producers is None else producers
@@ -171,6 +173,7 @@ async def run_review(
         clock=clock,
         indexes=IndexProvider(db, index_source or get_index_source(), clock),
         llm=llm or get_llm_client(),
+        sleep=sleep,
     )
     review = await get_review(db, review_id)
     review.status = ReviewStatus.running

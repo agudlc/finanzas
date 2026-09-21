@@ -124,6 +124,22 @@ async def pending_suggestions(db: AsyncSession) -> list[Suggestion]:
     return list(result.scalars().all())
 
 
+async def of_review(db: AsyncSession, review_id: uuid.UUID) -> list[Suggestion]:
+    """
+    What one Review proposed, in the order it proposed it.
+
+    This is history rather than the Inbox: a Suggestion is here whatever became
+    of it, because "what did that run actually do" is the question the Reviews
+    history answers.
+    """
+    result = await db.execute(
+        select(Suggestion)
+        .where(Suggestion.review_id == review_id)
+        .order_by(Suggestion.created_at)
+    )
+    return list(result.scalars().all())
+
+
 # How far back "the user already said no to this" reaches. Longer than the
 # Insight window, because a rejection is a standing instruction of sorts:
 # three months of them is what keeps a Review from asking the same question

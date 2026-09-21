@@ -4,8 +4,9 @@ The one seam these tests drive is the HTTP API.
 Every test talks to the FastAPI app over httpx against a real Postgres database
 migrated to head, and asserts on responses. The only fakes are at the edges,
 through dependency overrides: a fixed clock, a fixed source of dollar rates, a
-fixed source of inflation index values, a scripted model, and a queue that runs
-Reviews in-process instead of through Redis.
+fixed source of inflation index values, a scripted model, a backoff that is
+recorded rather than waited out, and a queue that runs Reviews in-process
+instead of through Redis.
 
 The scripted model is the one fake a test also reads back, because what the app
 sent to Claude is behaviour no response can show and the core brief is the
@@ -30,7 +31,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.clock import Clock, get_clock
 from app.database import get_db
 from app.inflation import IPC, IndexUnavailable, get_index_source
-from app.llm import LLMUnavailable, Reply, ToolCall
+from app.llm import NO_KEY, LLMUnavailable, Reply, ToolCall
 from app.main import app
 from app.models.enums import RateType, ReviewTrigger
 from app.queue import get_review_queue
@@ -113,6 +114,11 @@ class FixedIndexSource:
         return list(self.points)
 
 
+# What a 429 or a 529 reads like by the time the seam has classified it: the
+# request was fine and the model was not free.
+BUSY = "the model did not answer: overloaded"
+
+
 class ScriptedLLM:
     """
     Stands in for the Claude Messages API, saying exactly what a test wants.
@@ -135,6 +141,7 @@ class ScriptedLLM:
         # a run had without reaching inside the loop for them.
         self.tools: list[list[dict]] = []
         self.failure: tuple[str, int] | None = None
+        self.busy = 0
 
     def says(self, *insights: tuple[str, str], then: str = "Listo.") -> None:
         """Record one Insight per (topic, body), then answer and stop."""
@@ -169,6 +176,20 @@ class ScriptedLLM:
         """
         self.failure = (message, after)
 
+    def is_busy(self, turns: int) -> None:
+        """
+        The API says "not now" to the next `turns` asks, then answers.
+
+        This is the 429 and the 529: nothing is wrong with the request, so the
+        loop is meant to wait and ask the same turn again rather than lose the
+        Review over it.
+        """
+        self.busy = turns
+
+    def without_key(self) -> None:
+        """The installation has no API key, as the real client would find."""
+        self.failure = (NO_KEY, 0)
+
     @property
     def brief(self) -> str:
         """The core brief of the last run: the first thing it was sent."""
@@ -178,9 +199,27 @@ class ScriptedLLM:
         self.systems.append(system)
         self.runs.append(deepcopy(messages))
         self.tools.append(tools)
+        if self.busy > 0:
+            self.busy -= 1
+            raise LLMUnavailable(BUSY, transient=True)
         if self.failure is not None and len(self.runs) > self.failure[1]:
             raise LLMUnavailable(self.failure[0])
         return self.replies[0] if len(self.replies) == 1 else self.replies.pop(0)
+
+
+class InstantSleep:
+    """
+    The backoff between asks of a busy API, recorded instead of waited out.
+
+    A test that wants to say "it waited four seconds before asking again"
+    should not have to wait four seconds to say it.
+    """
+
+    def __init__(self):
+        self.waited: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.waited.append(seconds)
 
 
 class EagerReviewQueue:
@@ -192,11 +231,12 @@ class EagerReviewQueue:
     `break_with` for a producer that raises.
     """
 
-    def __init__(self, sessionmaker, clock: Clock, index_source, llm):
+    def __init__(self, sessionmaker, clock: Clock, index_source, llm, sleep):
         self._sessionmaker = sessionmaker
         self._clock = clock
         self._index_source = index_source
         self._llm = llm
+        self._sleep = sleep
         self._producers = PRODUCERS
         self._held = False
 
@@ -221,6 +261,7 @@ class EagerReviewQueue:
                 self._producers,
                 self._index_source,
                 self._llm,
+                self._sleep,
             )
 
 
@@ -336,12 +377,18 @@ def llm() -> ScriptedLLM:
 
 
 @pytest.fixture
-async def queue(engine, clock, index_source, llm) -> EagerReviewQueue:
+def sleeper() -> InstantSleep:
+    return InstantSleep()
+
+
+@pytest.fixture
+async def queue(engine, clock, index_source, llm, sleeper) -> EagerReviewQueue:
     return EagerReviewQueue(
         async_sessionmaker(engine, expire_on_commit=False),
         clock,
         index_source,
         llm,
+        sleeper,
     )
 
 

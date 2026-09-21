@@ -20,13 +20,34 @@ import anthropic
 
 DEFAULT_MODEL = "claude-sonnet-5"
 
+# What the API says when the answer is "not now" rather than "not like that":
+# 429 is the rate limit and 529 is the model overloaded. Both are worth asking
+# again in a moment; every other status is the request itself being wrong, and
+# asking again would only be wrong again.
+TRANSIENT_STATUSES = (429, 529)
+
+# There is no point reaching for the network without it, and no point dressing
+# that up as the model being busy: this is the installation being unconfigured.
+NO_KEY = "ANTHROPIC_API_KEY is not set, so no Review can call the model"
+
 # Enough for a handful of Insights in Spanish and nothing like enough to write
 # an essay with: the answer is meant to be short.
 MAX_TOKENS = 4096
 
 
 class LLMUnavailable(Exception):
-    """The model could not be reached, or there was no key to reach it with."""
+    """
+    The model could not be reached, or there was no key to reach it with.
+
+    `transient` is what the loop reads to decide between waiting and giving
+    up: a busy API is worth asking again, an unconfigured key or a request the
+    API refused is not, and a Review that fails on one of those fails at once
+    rather than after a minute of backoff.
+    """
+
+    def __init__(self, message: str, transient: bool = False):
+        super().__init__(message)
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -93,9 +114,7 @@ class AnthropicClient:
         self, system: str, messages: list[dict], tools: list[dict]
     ) -> Reply:
         if not self._api_key:
-            raise LLMUnavailable(
-                "ANTHROPIC_API_KEY is not set, so no Review can call the model"
-            )
+            raise LLMUnavailable(NO_KEY)
         client = anthropic.AsyncAnthropic(api_key=self._api_key)
         try:
             answer = await client.messages.create(
@@ -106,10 +125,32 @@ class AnthropicClient:
                 tools=tools,
             )
         except anthropic.AnthropicError as error:
-            raise LLMUnavailable(f"the model did not answer: {error}") from error
+            raise unavailable(error) from error
         finally:
             await client.close()
         return _read(answer)
+
+
+def unavailable(error: anthropic.AnthropicError) -> LLMUnavailable:
+    """
+    What went wrong, and whether asking again could go any differently.
+
+    This is the whole of what the loop knows about the API, so it is a
+    function of its own rather than three except branches: "worth asking
+    again" is a rule about statuses, and a rule is testable.
+    """
+    if isinstance(error, anthropic.APIStatusError):
+        return LLMUnavailable(
+            f"the model did not answer: {error}",
+            transient=error.status_code in TRANSIENT_STATUSES,
+        )
+    if isinstance(error, anthropic.APIConnectionError):
+        # The request never arrived, so nothing was decided about it: a
+        # network that dropped for a moment is as transient as a busy API.
+        return LLMUnavailable(
+            f"the model could not be reached: {error}", transient=True
+        )
+    return LLMUnavailable(f"the model did not answer: {error}")
 
 
 def _read(answer: Any) -> Reply:

@@ -123,22 +123,44 @@ async def pending_suggestions(db: AsyncSession) -> list[Suggestion]:
 REJECTION_MONTHS = 3
 
 
-async def rejected_since(db: AsyncSession, month: Date) -> list[Suggestion]:
+async def rejected_between(
+    db: AsyncSession,
+    first_month: Date,
+    month: Date,
+    kind: SuggestionKind | None = None,
+) -> list[Suggestion]:
     """
-    What the user said no to in the months up to `month`, newest first.
+    Every rejection from `first_month` to `month`, newest first.
 
     Rejections are kept and fed back into later Reviews (ADR-0002), so this is
     what "remember what I turned down" reads.
     """
-    month = month_of(month)
-    result = await db.execute(
+    statement = (
         select(Suggestion)
         .where(Suggestion.status == SuggestionStatus.rejected)
-        .where(Suggestion.month >= add_months(month, -REJECTION_MONTHS))
-        .where(Suggestion.month <= month)
+        .where(Suggestion.month >= month_of(first_month))
+        .where(Suggestion.month <= month_of(month))
         .order_by(Suggestion.month.desc(), Suggestion.resolved_at.desc())
     )
+    if kind is not None:
+        statement = statement.where(Suggestion.kind == kind)
+    result = await db.execute(statement)
     return list(result.scalars().all())
+
+
+async def rejected_since(
+    db: AsyncSession, month: Date, earliest: Date
+) -> list[Suggestion]:
+    """
+    What the user said no to lately, which is what the brief carries.
+
+    `earliest` is the lookback floor, so the window is the shorter of the two:
+    a Review reading a quarter is never told about the month before it.
+    """
+    month = month_of(month)
+    return await rejected_between(
+        db, max(add_months(month, -REJECTION_MONTHS), earliest), month
+    )
 
 
 # How far an already recorded amount may sit from the proposed one and still

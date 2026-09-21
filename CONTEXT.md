@@ -110,6 +110,10 @@ _Avoid_: Inflation rate, IPC (as a model name), CPI
 One run that produces Suggestions and Insights, about one month, with a trigger saying what caused it: an event (an Import finished, a Budget crossed a threshold, the month ended, a month's Recurring Expenses came due) or the user asking. A trigger that is scheduled rather than asked for happens at most once per month; it is due on a day, and if nothing ran it then, the next time the user opens the Inbox does. Not every Review runs the agent — some are plain arithmetic over Recurring Expenses and Budgets. Every Suggestion and every Insight belongs to exactly one Review.
 _Avoid_: Job, analysis, scan, agent run
 
+**Lookback**:
+How far back a Review may read: a quarter — the month under review and the two before it — or a year, chosen in Ajustes and a quarter by default. The brief and the agent's read tools both stop there, and a tool asked for an older month answers with the limit instead of the data. It is the user's decision because everything read on the agent's behalf, Transaction descriptions included, is sent to Anthropic.
+_Avoid_: History window, memory, retention
+
 **Insight**:
 A read-only observation the agent produces during a Review. It changes no data. It belongs to the month it was produced in and only waits in the Inbox during that month, whether or not the user dismisses it; afterwards it stays as history that later Reviews can read.
 _Avoid_: Tip, alert, notification

@@ -29,7 +29,12 @@ import {
   useUpdateRule,
   useUpdateSettings,
 } from '@/lib/queries';
-import type { Currency, RateType, TransactionType } from '@/lib/types';
+import type {
+  AgentLookback,
+  Currency,
+  RateType,
+  TransactionType,
+} from '@/lib/types';
 
 export const Route = createFileRoute('/ajustes')({
   component: Ajustes,
@@ -90,7 +95,26 @@ function Preferences() {
             }))}
           />
         </Field>
+        <Field
+          label="Historial del agente"
+          hint="Hasta dónde puede mirar para atrás cuando revisa un mes."
+        >
+          <SelectField
+            value={settings.data?.agent_lookback ?? null}
+            onChange={(next) =>
+              update.mutate({ agent_lookback: next as AgentLookback })
+            }
+            options={[
+              { value: 'quarter', label: 'Un trimestre' },
+              { value: 'year', label: 'Un año' },
+            ]}
+          />
+        </Field>
       </div>
+      <p className="text-xs text-ink-mute">
+        Para revisar un mes, el agente le manda a Anthropic lo que hay en esos
+        meses: montos, categorías y las descripciones de tus transacciones.
+      </p>
       <ErrorText error={update.error} />
     </section>
   );

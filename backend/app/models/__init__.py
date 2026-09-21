@@ -27,6 +27,7 @@ from app.database import Base
 from app.models.enums import (
     SCHEDULED_TRIGGERS,
     AdjustmentKind,
+    AgentLookback,
     ConfirmationStatus,
     Currency,
     IndexOrigin,
@@ -302,6 +303,12 @@ class Settings(Base):
     )
     default_rate_type: Mapped[RateType] = mapped_column(
         Enum(RateType), default=RateType.card
+    )
+    # How far back a Review may read. It is here rather than in the code
+    # because it is the user's call how much of their history is worth sending
+    # to a model, and they are told as much where they set it.
+    agent_lookback: Mapped[AgentLookback] = mapped_column(
+        Enum(AgentLookback), default=AgentLookback.quarter
     )
 
 

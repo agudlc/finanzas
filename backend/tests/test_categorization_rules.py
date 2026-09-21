@@ -64,6 +64,19 @@ async def test_the_same_pattern_is_not_mapped_twice(client):
     assert response.status_code == 409
 
 
+async def test_the_same_pattern_is_not_mapped_twice_whatever_its_case(client):
+    """Matching ignores case, so those two patterns are one rule."""
+    delivery = await default_category(client, "Delivery", "expense")
+    await create_rule(client, "pedidosya", delivery)
+
+    response = await client.post(
+        "/categorization-rules/",
+        json={"pattern": "PedidosYa", "category_id": delivery["id"]},
+    )
+
+    assert response.status_code == 409
+
+
 async def test_a_rule_cannot_point_at_a_category_that_does_not_exist(client):
     response = await client.post(
         "/categorization-rules/",

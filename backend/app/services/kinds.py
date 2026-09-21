@@ -22,18 +22,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
 from app.models import Suggestion, Transaction
-from app.models.enums import SuggestionKind, TransactionType
+from app.models.enums import RuleOrigin, SuggestionKind, TransactionType
 from app.months import format_month
 from app.schemas.budget import BudgetCreate
+from app.schemas.categorization import CategorizationRuleCreate
+from app.schemas.recurring_expense import RecurringExpenseCreate
 from app.schemas.review import (
+    AddCategorizationRulePayload,
+    AddRecurringExpensePayload,
     AddTransactionPayload,
     RecategorizeTransactionPayload,
     SetBudgetPayload,
 )
 from app.schemas.transaction import TransactionCreate, TransactionUpdate
 from app.services.budgets import check_budget, set_budget
+from app.services.categorization import build_rule, check_rule
 from app.services.errors import Invalid
 from app.services.money import RateEstimator
+from app.services.recurring_expenses import (
+    build_recurring_expense,
+    check_proposed as check_proposed_template,
+)
 from app.services.transactions import (
     build_transaction,
     change_transaction,
@@ -260,6 +269,135 @@ async def _reads_recategorize(
     )
 
 
+# --- add_categorization_rule -----------------------------------------------
+
+
+def _rule_from(proposed: AddCategorizationRulePayload) -> CategorizationRuleCreate:
+    """
+    The rule the proposal would learn, marked as having come from one.
+
+    The origin is not the agent's to state: a rule the user accepts came from
+    a Suggestion whatever the payload says, and the payload does not say.
+    """
+    return CategorizationRuleCreate(
+        pattern=proposed.pattern,
+        category_id=proposed.category_id,
+        origin=RuleOrigin.suggestion,
+    )
+
+
+def _add_categorization_rule_key(
+    proposed: AddCategorizationRulePayload, month: Date
+) -> str:
+    """
+    What the proposal is about: this pattern, whatever its case.
+
+    Not the Category and not the month. A pattern can only be mapped once, so
+    "send pedidosya somewhere" is one question however it is answered, and a
+    user who said no to learning it does not want it back in four weeks.
+    """
+    return proposed.pattern.strip().casefold()
+
+
+async def _check_add_categorization_rule(
+    db: AsyncSession, proposed: AddCategorizationRulePayload
+) -> None:
+    await check_rule(db, _rule_from(proposed))
+
+
+async def _apply_add_categorization_rule(
+    db: AsyncSession,
+    proposed: AddCategorizationRulePayload,
+    estimator: RateEstimator,
+    clock: Clock,
+) -> uuid.UUID:
+    """
+    Learn the rule, and leave every Transaction where it is.
+
+    A rule only applies to what an Import brings in after it exists (ADR-0004),
+    and nothing here reaches for a Transaction, so that holds by construction
+    rather than by care.
+    """
+    rule = await build_rule(db, _rule_from(proposed))
+    return rule.id
+
+
+async def _reads_add_categorization_rule(
+    db: AsyncSession, suggestion: Suggestion, category: str
+) -> str:
+    payload = suggestion.payload
+    return (
+        f"send imported Transactions saying \"{payload['pattern']}\" "
+        f"to {category} from now on"
+    )
+
+
+# --- add_recurring_expense -------------------------------------------------
+
+
+def _template_from(proposed: AddRecurringExpensePayload) -> RecurringExpenseCreate:
+    """
+    The template the proposal would set up, without an Adjustment Rule.
+
+    A rule is added afterwards if the user has one; this kind does not propose
+    one, so there is nothing to carry across.
+    """
+    return RecurringExpenseCreate(
+        description=proposed.description,
+        category_id=proposed.category_id,
+        currency=proposed.currency,
+        reference_amount=proposed.reference_amount,
+        expected_day=proposed.expected_day,
+        is_fixed=proposed.is_fixed,
+    )
+
+
+def _add_recurring_expense_key(
+    proposed: AddRecurringExpensePayload, month: Date
+) -> str:
+    """
+    What the proposal is about: this charge, in this Category.
+
+    A template is not about a month — it is about every month — so the Review's
+    month is no part of it, and neither is the amount: "Netflix in Ocio" is the
+    same template proposed at 7.999 or at 9.499.
+    """
+    return f"{proposed.description.strip().casefold()}:{proposed.category_id}"
+
+
+async def _check_add_recurring_expense(
+    db: AsyncSession, proposed: AddRecurringExpensePayload
+) -> None:
+    await check_proposed_template(db, _template_from(proposed))
+
+
+async def _apply_add_recurring_expense(
+    db: AsyncSession,
+    proposed: AddRecurringExpensePayload,
+    estimator: RateEstimator,
+    clock: Clock,
+) -> uuid.UUID:
+    """
+    Set up the template, which records nothing by itself.
+
+    From next month on it produces a Suggestion, the way one set up from the
+    screen does; accepting this spends nothing.
+    """
+    template = await build_recurring_expense(db, _template_from(proposed))
+    return template.id
+
+
+async def _reads_add_recurring_expense(
+    db: AsyncSession, suggestion: Suggestion, category: str
+) -> str:
+    payload = suggestion.payload
+    return (
+        f"expect \"{payload['description']}\" in {category} every month, "
+        f"{payload['reference_amount']} {payload['currency']} "
+        f"on day {payload['expected_day']}"
+    )
+
+
 KINDS: dict[SuggestionKind, Kind] = {
     SuggestionKind.add_transaction: Kind(
         payload=AddTransactionPayload,
@@ -295,5 +433,31 @@ KINDS: dict[SuggestionKind, Kind] = {
         check=_check_recategorize,
         apply=_apply_recategorize,
         reads=_reads_recategorize,
+    ),
+    SuggestionKind.add_categorization_rule: Kind(
+        payload=AddCategorizationRulePayload,
+        purpose=(
+            "Propose learning a Categorization Rule, when the same kind of "
+            "description keeps arriving and the user keeps filing it by hand. "
+            "Accepting it files Transactions imported from then on, and "
+            "changes nothing already recorded."
+        ),
+        key=_add_categorization_rule_key,
+        check=_check_add_categorization_rule,
+        apply=_apply_add_categorization_rule,
+        reads=_reads_add_categorization_rule,
+    ),
+    SuggestionKind.add_recurring_expense: Kind(
+        payload=AddRecurringExpensePayload,
+        purpose=(
+            "Propose a Recurring Expense template, when the same charge "
+            "arrives every month and no template covers it. Accepting it sets "
+            "the template up; it records no Expense by itself, it only makes "
+            "each month propose one."
+        ),
+        key=_add_recurring_expense_key,
+        check=_check_add_recurring_expense,
+        apply=_apply_add_recurring_expense,
+        reads=_reads_add_recurring_expense,
     ),
 }

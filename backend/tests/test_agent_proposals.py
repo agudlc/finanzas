@@ -15,6 +15,8 @@ stored.
 from app.llm import Reply, ToolCall
 from tests.api import create_category, create_transaction, default_category
 from tests.test_agent_reviews import agent_review, finished, insights
+from tests.test_categorization_rules import create_rule
+from tests.test_recurring_expenses import create_recurring
 from tests.test_reviews import suggestions
 from tests.test_suggestions import accept, reject, transactions
 
@@ -64,6 +66,8 @@ async def test_the_agent_is_offered_one_propose_tool_per_kind(client, llm):
         "propose_add_transaction",
         "propose_set_budget",
         "propose_recategorize_transaction",
+        "propose_add_categorization_rule",
+        "propose_add_recurring_expense",
     } <= offered, "one tool per shape of change the app knows how to apply"
 
 
@@ -476,3 +480,305 @@ async def test_a_move_into_a_category_the_user_made_is_proposed(client, llm):
 
     [proposal] = await suggestions(client)
     assert proposal["payload"]["category_id"] == mine["id"]
+
+
+# --- add_categorization_rule -----------------------------------------------
+
+
+async def rules(client) -> list[dict]:
+    response = await client.get("/categorization-rules/")
+    response.raise_for_status()
+    return response.json()
+
+
+async def learns(client, llm, **arguments) -> str:
+    """"Esto siempre va acá": the agent proposing a Categorization Rule."""
+    return await proposes(
+        client,
+        llm,
+        "propose_add_categorization_rule",
+        rationale="Filaste PedidosYa a mano tres veces este mes.",
+        **arguments,
+    )
+
+
+async def test_a_proposed_rule_waits_in_the_inbox(client, llm):
+    delivery = await default_category(client, "Delivery", "expense")
+
+    answer = await learns(client, llm, pattern="pedidosya", category_id=delivery["id"])
+
+    assert "is_error" not in answer
+    [proposal] = await suggestions(client)
+    assert proposal["kind"] == "add_categorization_rule"
+    assert proposal["status"] == "pending"
+    assert proposal["payload"] == {
+        "pattern": "pedidosya",
+        "category_id": delivery["id"],
+    }
+    assert await rules(client) == [], "nothing is learned until the user says so"
+
+
+async def test_accepting_a_rule_learns_it_as_coming_from_a_suggestion(client, llm):
+    delivery = await default_category(client, "Delivery", "expense")
+    await learns(client, llm, pattern="pedidosya", category_id=delivery["id"])
+    [proposal] = await suggestions(client)
+
+    response = await accept(client, proposal["id"])
+
+    assert response.status_code == 200
+    [rule] = await rules(client)
+    assert response.json()["result_id"] == rule["id"]
+    assert rule["pattern"] == "pedidosya"
+    assert rule["category_id"] == delivery["id"]
+    assert rule["origin"] == "suggestion", (
+        "a rule the user accepted came from a Suggestion, not from their hand"
+    )
+
+
+async def test_accepting_a_rule_leaves_the_transactions_already_recorded_alone(
+    client, llm
+):
+    """A rule reaches forward only: what is recorded stays where it is (ADR-0004)."""
+    expense, delivery = await misfiled(client)
+
+    await learns(client, llm, pattern="Pedidos Ya", category_id=delivery["id"])
+    [proposal] = await suggestions(client)
+    await accept(client, proposal["id"])
+
+    [untouched] = await transactions(client)
+    assert untouched["id"] == expense["id"]
+    assert untouched["category_id"] == expense["category_id"], (
+        "the Expense the pattern matches is not recategorized by learning it"
+    )
+
+
+async def test_an_edited_rule_is_learned_as_the_user_edited_it(client, llm):
+    delivery = await default_category(client, "Delivery", "expense")
+    ocio = await default_category(client, "Ocio", "expense")
+    await learns(client, llm, pattern="pedidosya", category_id=delivery["id"])
+    [proposal] = await suggestions(client)
+
+    await accept(client, proposal["id"], category_id=ocio["id"])
+
+    [rule] = await rules(client)
+    assert rule["category_id"] == ocio["id"]
+
+
+async def test_an_edited_rule_is_revalidated(client, llm):
+    delivery = await default_category(client, "Delivery", "expense")
+    await learns(client, llm, pattern="pedidosya", category_id=delivery["id"])
+    [proposal] = await suggestions(client)
+
+    response = await accept(client, proposal["id"], pattern="")
+
+    assert response.status_code == 422
+    assert await rules(client) == [], (
+        "an edited proposal is no looser than a proposed one"
+    )
+
+
+async def test_a_pattern_already_mapped_is_refused(client, llm):
+    delivery = await default_category(client, "Delivery", "expense")
+    await create_rule(client, "pedidosya", delivery)
+
+    answer = await learns(client, llm, pattern="PedidosYa", category_id=delivery["id"])
+
+    assert answer["is_error"] is True
+    assert "already exists" in answer["content"]
+    assert await suggestions(client) == [], (
+        "matching ignores case, so that rule is already learned"
+    )
+
+
+async def test_the_same_pattern_is_not_proposed_twice_whatever_its_case(
+    client, llm
+):
+    delivery = await default_category(client, "Delivery", "expense")
+    ocio = await default_category(client, "Ocio", "expense")
+    await learns(client, llm, pattern="pedidosya", category_id=delivery["id"])
+
+    answer = await learns(client, llm, pattern="PedidosYa", category_id=ocio["id"])
+
+    assert answer["is_error"] is True
+    assert "already been made" in answer["content"]
+    [proposal] = await suggestions(client)
+    assert proposal["payload"]["category_id"] == delivery["id"]
+
+
+async def test_a_rule_pointing_at_a_category_that_does_not_exist_is_refused(
+    client, llm
+):
+    answer = await learns(client, llm, pattern="pedidosya", category_id=UNKNOWN)
+
+    assert answer["is_error"] is True
+    assert "no Category with id" in answer["content"]
+    assert await suggestions(client) == []
+
+
+async def test_a_proposed_rule_is_read_back_in_the_next_brief(client, llm):
+    delivery = await default_category(client, "Delivery", "expense")
+    await learns(client, llm, pattern="pedidosya", category_id=delivery["id"])
+
+    llm.will(Reply(text="Nada nuevo."))
+    await agent_review(client)
+
+    assert 'send imported Transactions saying "pedidosya" to Delivery' in llm.brief
+
+
+# --- add_recurring_expense -------------------------------------------------
+
+
+async def templates(client) -> list[dict]:
+    response = await client.get("/recurring-expenses/")
+    response.raise_for_status()
+    return response.json()
+
+
+async def expects(client, llm, **arguments) -> str:
+    """"Esto te llega todos los meses": the agent proposing a template."""
+    return await proposes(
+        client,
+        llm,
+        "propose_add_recurring_expense",
+        rationale="Netflix te llegó los últimos tres meses por el mismo monto.",
+        **{
+            "description": "Netflix",
+            "currency": "ARS",
+            "reference_amount": "7999.00",
+            "expected_day": 12,
+            **arguments,
+        },
+    )
+
+
+async def test_a_proposed_recurring_expense_waits_in_the_inbox(client, llm):
+    ocio = await default_category(client, "Ocio", "expense")
+
+    answer = await expects(client, llm, category_id=ocio["id"])
+
+    assert "is_error" not in answer
+    [proposal] = await suggestions(client)
+    assert proposal["kind"] == "add_recurring_expense"
+    assert proposal["status"] == "pending"
+    assert proposal["payload"]["description"] == "Netflix"
+    assert proposal["payload"]["expected_day"] == 12
+    assert await templates(client) == [], "nothing is set up until the user says so"
+
+
+async def test_accepting_a_recurring_expense_sets_the_template_up(client, llm):
+    ocio = await default_category(client, "Ocio", "expense")
+    await expects(client, llm, category_id=ocio["id"])
+    [proposal] = await suggestions(client)
+
+    response = await accept(client, proposal["id"])
+
+    assert response.status_code == 200
+    [template] = await templates(client)
+    assert response.json()["result_id"] == template["id"]
+    assert template["description"] == "Netflix"
+    assert template["category_id"] == ocio["id"]
+    assert template["reference_amount"] == "7999.00"
+    assert template["expected_day"] == 12
+    assert template["currency"] == "ARS"
+    assert template["is_active"] is True
+    assert template["adjustment"] is None
+
+
+async def test_accepting_a_recurring_expense_records_no_expense(client, llm):
+    """A template produces Suggestions, not Transactions: accepting spends nothing."""
+    ocio = await default_category(client, "Ocio", "expense")
+    await expects(client, llm, category_id=ocio["id"])
+    [proposal] = await suggestions(client)
+
+    await accept(client, proposal["id"])
+
+    assert await transactions(client) == []
+
+
+async def test_an_edited_recurring_expense_is_set_up_as_the_user_edited_it(
+    client, llm
+):
+    ocio = await default_category(client, "Ocio", "expense")
+    await expects(client, llm, category_id=ocio["id"])
+    [proposal] = await suggestions(client)
+
+    await accept(client, proposal["id"], reference_amount="9499.00", expected_day=15)
+
+    [template] = await templates(client)
+    assert template["reference_amount"] == "9499.00"
+    assert template["expected_day"] == 15
+
+
+async def test_an_edited_recurring_expense_is_revalidated(client, llm):
+    ocio = await default_category(client, "Ocio", "expense")
+    await expects(client, llm, category_id=ocio["id"])
+    [proposal] = await suggestions(client)
+
+    response = await accept(client, proposal["id"], expected_day=44)
+
+    assert response.status_code == 422
+    assert await templates(client) == []
+
+
+async def test_a_template_the_user_already_has_is_refused(client, llm):
+    """Two templates for one charge would each propose a payment every month."""
+    ocio = await default_category(client, "Ocio", "expense")
+    await create_recurring(client, description="netflix", category_id=ocio["id"])
+
+    answer = await expects(client, llm, category_id=ocio["id"])
+
+    assert answer["is_error"] is True
+    assert "already a Recurring Expense" in answer["content"]
+    assert [one["kind"] for one in await suggestions(client)] == ["add_transaction"], (
+        "only the template's own monthly payment is waiting, proposed by the "
+        "arithmetic; no second template was proposed"
+    )
+
+
+async def test_a_recurring_expense_in_an_income_category_is_refused(client, llm):
+    sueldo = await default_category(client, "Sueldo", "income")
+
+    answer = await expects(client, llm, category_id=sueldo["id"])
+
+    assert answer["is_error"] is True
+    assert "income Category" in answer["content"]
+    assert await suggestions(client) == []
+
+
+async def test_the_same_template_is_not_proposed_twice(client, llm):
+    ocio = await default_category(client, "Ocio", "expense")
+    await expects(client, llm, category_id=ocio["id"])
+
+    answer = await expects(
+        client, llm, category_id=ocio["id"], reference_amount="9499.00"
+    )
+
+    assert answer["is_error"] is True
+    assert "already been made" in answer["content"]
+    [proposal] = await suggestions(client)
+    assert proposal["payload"]["reference_amount"] == "7999.00", (
+        "the same charge in the same Category is the same template, whatever it costs"
+    )
+
+
+async def test_the_same_charge_in_another_category_is_its_own_proposal(client, llm):
+    ocio = await default_category(client, "Ocio", "expense")
+    servicios = await default_category(client, "Servicios", "expense")
+    await expects(client, llm, category_id=ocio["id"])
+
+    answer = await expects(client, llm, category_id=servicios["id"])
+
+    assert "is_error" not in answer
+    assert len(await suggestions(client)) == 2
+
+
+async def test_a_proposed_recurring_expense_is_read_back_in_the_next_brief(
+    client, llm
+):
+    ocio = await default_category(client, "Ocio", "expense")
+    await expects(client, llm, category_id=ocio["id"])
+
+    llm.will(Reply(text="Nada nuevo."))
+    await agent_review(client)
+
+    assert 'expect "Netflix" in Ocio every month, 7999.00 ARS on day 12' in llm.brief

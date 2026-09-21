@@ -131,6 +131,75 @@ class RecategorizeTransactionPayload(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class AddCategorizationRulePayload(BaseModel):
+    """
+    What an `add_categorization_rule` Suggestion would learn.
+
+    A rule is "description contains this -> that Category" and nothing else.
+    Accepting one changes no Transaction already recorded: a rule only applies
+    to what an Import brings in after it exists, and a Transaction already
+    filed in the wrong place is a recategorization, which is its own kind
+    (ADR-0004).
+    """
+
+    pattern: str = Field(
+        min_length=1,
+        max_length=250,
+        description=(
+            "The text to look for in an imported Transaction's description. "
+            "Case does not matter, and the longest matching pattern wins, so "
+            'prefer the merchant over a word it shares: "mercado libre" '
+            'rather than "mercado".'
+        ),
+    )
+    category_id: uuid.UUID = Field(
+        description=(
+            "The Category those Transactions should go in, of the type they "
+            "are: an expense Category for Expenses."
+        )
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class AddRecurringExpensePayload(BaseModel):
+    """
+    What an `add_recurring_expense` Suggestion would set up.
+
+    The template's own fields, and not its Adjustment Rule: how a rent moves
+    every six months is written in a contract the agent has never read, and a
+    template the user accepts can be given a rule afterwards like any other.
+    The template records nothing by itself — each month it produces a
+    Suggestion — so accepting this proposes rather than spends.
+    """
+
+    description: str = Field(
+        min_length=1,
+        max_length=250,
+        description="What the Expense is, as it would read every month.",
+    )
+    category_id: uuid.UUID = Field(
+        description="The expense Category its payments go in."
+    )
+    currency: Currency = Field(description="ARS or USD.")
+    reference_amount: Decimal = Field(
+        gt=0,
+        description=(
+            "What to expect it to cost, until a payment of its own says "
+            "otherwise."
+        ),
+    )
+    expected_day: int = Field(
+        ge=1, le=31, description="The day of the month it falls on."
+    )
+    is_fixed: bool = Field(
+        default=False,
+        description="Whether the user would call this Expense unavoidable.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class SuggestionResponse(BaseModel):
     """
     What is being proposed, and why — and, once resolved, what came of it.

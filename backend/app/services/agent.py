@@ -38,7 +38,7 @@ from app.services.outside import Outside
 
 # Bumped whenever the system prompt changes, so a run can be read against the
 # words that produced it rather than against today's.
-PROMPT_VERSION = "2026-09-c"
+PROMPT_VERSION = "2026-09-d"
 
 # The brief is already complete and the tools only fill in around it, so a run
 # that has not finished in ten turns is looping rather than working.
@@ -84,6 +84,12 @@ How to decide what to say:
   proposal is a question they have to answer, so a doubtful one costs them
   more than saying nothing. Recategorize a Transaction only when its
   description makes the right Category obvious and the one it is in wrong.
+  Propose a Categorization Rule only for a pattern that has arrived more than
+  once and always belongs in the same Category; it files what is imported
+  from then on and moves nothing already recorded, so a Transaction sitting
+  in the wrong place is a recategorization as well. Propose a Recurring
+  Expense only for a charge you can see in several months, and read the
+  templates first: one that exists is not proposed again.
 - Point at the numbers in the brief. "Gastaste 120.000 en Delivery, 40% más que
   el límite" is worth saying; "cuidado con los gastos" is not.
 - Do not repeat an observation already recorded in the last two months, and do

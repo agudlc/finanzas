@@ -1,10 +1,15 @@
 """
-The core brief: the month, written out for the model to read.
+The brief: the month, written out for the model to read.
 
 It is the one place that decides what a Review is allowed to know, which is
 what keeps the cost of a run bounded and the answer about *this* month. It is
 built from the same services the screens read, so the agent is never told
 something the user cannot see for themselves.
+
+Every Review gets the core brief; some get more. What a run is for is the
+trigger, and a Review that fires because an Import finished is being asked
+about those rows in particular — so it is handed them, and the Rules that filed
+them, on top of the month they landed in.
 
 It is written in English, like the rest of the code; what comes back is the
 user's, and the system prompt is where that is asked for in Spanish.
@@ -15,24 +20,46 @@ for, it is reading one language and not two.
 """
 
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import date as Date
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
-from app.models import Review, Suggestion
-from app.models.enums import Currency
+from app.models import Import, Review, Suggestion, Transaction
+from app.models.enums import Currency, ReviewTrigger
 from app.months import format_month
 from app.services import insights as insights_service
 from app.services.budgets import budgets_in, progress_of
 from app.services.categories import list_categories
+from app.services.categorization import list_rules
 from app.services.kinds import KINDS
 from app.services.lookback import earliest_month_for
 from app.services.money import MoneyConverter, converter_for
 from app.services.settings import get_settings
 from app.services.suggestions import pending_suggestions, rejected_since
 from app.services.summary import converted_totals
+
+# How many imported Transactions the brief writes out. A statement is a few
+# dozen rows and this is two months of them; past that the run is being asked
+# to read a database rather than a file, and the read tools are how it digs.
+IMPORTED_ROWS = 200
+
+
+async def brief(db: AsyncSession, review: Review, clock: Clock) -> str:
+    """
+    Everything this Review is told before it says anything.
+
+    The core brief, and whatever its trigger adds to it. A trigger with nothing
+    to add gets the core brief alone, which is what "the month" means.
+    """
+    core = await core_brief(db, review, clock)
+    extra = EXTRAS.get(review.trigger)
+    if extra is None:
+        return core
+    return "\n\n".join([core, await extra(db, review, clock)])
 
 
 async def core_brief(db: AsyncSession, review: Review, clock: Clock) -> str:
@@ -231,3 +258,128 @@ async def _insights(db: AsyncSession, month: Date, earliest: Date) -> str:
         lines,
         "- Nothing has been observed yet.",
     )
+
+
+async def transaction_line(
+    converter: MoneyConverter,
+    currency: Currency,
+    names: dict[uuid.UUID, str],
+    one: Transaction,
+) -> str:
+    """
+    One Transaction as the agent reads it: converted, and said so when it was.
+
+    A USD Expense keeps its Original Amount next to the converted one, because
+    "30 dólares" is what the user remembers spending and the pesos are what
+    the month adds up to.
+    """
+    amount = await converter.convert(
+        one.amount, one.currency, currency, one.date, one.exchange_rate
+    )
+    original = (
+        ""
+        if one.currency is currency
+        else f" (originally {figure(one.amount)} {one.currency.value})"
+    )
+    return (
+        f"- {one.date.isoformat()}, {named(names, one.category_id)}, "
+        f'"{one.description or "no description"}", {one.type.value}: '
+        f"{figure(amount)}{original}"
+    )
+
+
+async def _what_was_imported(
+    db: AsyncSession, review: Review, clock: Clock
+) -> str:
+    """
+    What the Import or Imports just brought in, and the Rules that filed them.
+
+    This is the whole point of the run: these rows were categorised by the
+    Categorization Rules and by the user working down a list, which is where a
+    Category ends up wrong and where the next Rule is hiding. Both are written
+    out because one without the other says nothing — a Transaction in the wrong
+    place is only obviously wrong next to the rule that put it there.
+    """
+    records = await _imports_of(db, review)
+    currency = (await get_settings(db)).display_currency
+    converter = await converter_for(db, clock)
+    names = await _category_names(db)
+    lines = [
+        await transaction_line(converter, currency, names, one)
+        for one in await _imported_transactions(db, records)
+    ]
+    # Said outright when there were more rows than the brief writes out, so a
+    # run counting what it can see knows it is not counting the file.
+    heading = "The Transactions it brought in, newest first" + (
+        f", the first {IMPORTED_ROWS} of them"
+        if len(lines) == IMPORTED_ROWS
+        else ""
+    )
+    return "\n\n".join(
+        [
+            "An Import has just finished. What follows is what it brought in "
+            "and the Categorization Rules that filed it, which is what this "
+            "Review is about.",
+            section(
+                "What was just imported",
+                [
+                    f"- {one.filename}: {one.imported_count} Transactions "
+                    f"recorded, {one.skipped_count} rows skipped"
+                    for one in records
+                ],
+                "- The Import it was about is gone: it was undone.",
+            ),
+            section(heading, lines, "- It brought in no Transactions."),
+            await _rules(db, names),
+        ]
+    )
+
+
+async def _imports_of(db: AsyncSession, review: Review) -> list[Import]:
+    """The Imports this Review is about, oldest first."""
+    result = await db.execute(
+        select(Import)
+        .where(Import.review_id == review.id)
+        .order_by(Import.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def _imported_transactions(
+    db: AsyncSession, records: list[Import]
+) -> list[Transaction]:
+    if not records:
+        return []
+    result = await db.execute(
+        select(Transaction)
+        .where(Transaction.import_id.in_(one.id for one in records))
+        .order_by(Transaction.date.desc(), Transaction.created_at.desc())
+        .limit(IMPORTED_ROWS)
+    )
+    return list(result.scalars().all())
+
+
+async def _rules(db: AsyncSession, names: dict[uuid.UUID, str]) -> str:
+    """
+    The Categorization Rules as they stand, so a new one is not a repeat.
+
+    A Rule files what is imported from then on and moves nothing already
+    recorded, which is why the rows above and these belong in the same brief.
+    """
+    return section(
+        "The Categorization Rules as they stand",
+        [
+            f'- "{one.pattern}" -> {named(names, one.category_id)}'
+            for one in await list_rules(db)
+        ],
+        "- There are no Categorization Rules yet.",
+    )
+
+
+# What each trigger adds to the core brief. A trigger absent from here is a
+# Review about the month and nothing more.
+Extra = Callable[[AsyncSession, Review, Clock], Awaitable[str]]
+
+EXTRAS: dict[ReviewTrigger, Extra] = {
+    ReviewTrigger.import_finished: _what_was_imported
+}

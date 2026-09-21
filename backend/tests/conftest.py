@@ -17,8 +17,9 @@ import asyncio
 import os
 import subprocess
 import sys
+import uuid
 from copy import deepcopy
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -55,14 +56,37 @@ FIXED_RATES = {
 }
 
 
+# Where in the day a fixed clock starts, so "two minutes later" stays inside
+# the same day and a test never has to think about it.
+MIDDAY = time(12, 0)
+
+
 class FixedClock(Clock):
-    """Today, pinned. Tests move it to exercise date-dependent behaviour."""
+    """
+    Today, pinned. Tests move it to exercise date-dependent behaviour.
+
+    The time of day is pinned with it, because a Review that waits before it
+    starts is measured in minutes: `wait` is how a test says those minutes went
+    by without the date moving under everything else.
+    """
 
     def __init__(self, today: date = TODAY):
         self.date = today
+        self.elapsed = timedelta()
 
     def today(self) -> date:
         return self.date
+
+    def now(self) -> datetime:
+        return datetime.combine(self.date, MIDDAY, tzinfo=UTC) + self.elapsed
+
+    def wait(self, delay: timedelta) -> None:
+        """Let `delay` go by."""
+        self.elapsed += delay
+
+    def reach(self, moment: datetime) -> None:
+        """Let time run forward to `moment`, unless it is already past."""
+        self.wait(max(moment - self.now(), timedelta()))
 
 
 class FixedRateSource:
@@ -229,9 +253,15 @@ class EagerReviewQueue:
     It runs exactly what the ARQ job runs, so the only thing tests give up by
     using it is having to wait. `hold` stands in for a worker that is down, and
     `break_with` for a producer that raises.
+
+    A Review handed over with a delay is held instead of run, the way a
+    deferred ARQ job waits in Redis: `release` is the test saying those minutes
+    went by, and it moves the clock to each job's moment before running it, so
+    a run that was pushed back past one of them is skipped here exactly as it
+    would be in the worker.
     """
 
-    def __init__(self, sessionmaker, clock: Clock, index_source, llm, sleep):
+    def __init__(self, sessionmaker, clock: FixedClock, index_source, llm, sleep):
         self._sessionmaker = sessionmaker
         self._clock = clock
         self._index_source = index_source
@@ -239,6 +269,7 @@ class EagerReviewQueue:
         self._sleep = sleep
         self._producers = PRODUCERS
         self._held = False
+        self._deferred: list[tuple[uuid.UUID, datetime]] = []
 
     def hold(self) -> None:
         """Leave Reviews queued, as a worker that never wakes up would."""
@@ -250,9 +281,30 @@ class EagerReviewQueue:
 
         self._producers = {trigger: [explode] for trigger in ReviewTrigger}
 
-    async def enqueue(self, review_id) -> None:
+    async def enqueue(self, review_id, delay: timedelta | None = None) -> None:
         if self._held:
             return
+        if delay is not None:
+            self._deferred.append((review_id, self._clock.now() + delay))
+            return
+        await self._run(review_id)
+
+    async def release(self, jobs: int | None = None) -> None:
+        """
+        Let the deferrals elapse and run what they scheduled.
+
+        In the order the jobs would fire, and at the moment each would fire it.
+        `jobs` runs only the first few of them, which is how a test says "the
+        moment the first Import asked for came, and then nothing did".
+        """
+        due = sorted(self._deferred, key=lambda job: job[1])
+        firing = due if jobs is None else due[:jobs]
+        self._deferred = due[len(firing) :]
+        for review_id, moment in firing:
+            self._clock.reach(moment)
+            await self._run(review_id)
+
+    async def _run(self, review_id) -> None:
         async with self._sessionmaker() as session:
             await run_review(
                 session,

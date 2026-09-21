@@ -92,6 +92,7 @@ class ReviewTrigger(str, enum.Enum):
 
     recurring_monthly = "recurring_monthly"
     month_end = "month_end"
+    import_finished = "import_finished"
     manual = "manual"
     manual_agent = "manual_agent"
 
@@ -108,7 +109,7 @@ MANUAL_TRIGGERS = (ReviewTrigger.manual, ReviewTrigger.manual_agent)
 # The triggers whose Reviews call the model. Deterministic and agent work never
 # share a Review (ADR-0003), so the trigger alone says whether one used the
 # agent, and nothing has to be set while the run is going.
-AGENT_TRIGGERS = (ReviewTrigger.manual_agent,)
+AGENT_TRIGGERS = (ReviewTrigger.manual_agent, ReviewTrigger.import_finished)
 
 
 class ReviewStatus(str, enum.Enum):

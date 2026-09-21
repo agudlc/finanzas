@@ -9,6 +9,7 @@ why `make test` still needs nothing but Postgres.
 
 import os
 import uuid
+from datetime import timedelta
 from typing import Protocol
 
 from arq.connections import RedisSettings, create_pool
@@ -25,7 +26,18 @@ def redis_settings() -> RedisSettings:
 class ReviewQueue(Protocol):
     """Hands a Review id to whatever runs Reviews."""
 
-    async def enqueue(self, review_id: uuid.UUID) -> None: ...
+    async def enqueue(
+        self, review_id: uuid.UUID, delay: timedelta | None = None
+    ) -> None:
+        """
+        Run this Review, now or once `delay` has gone by.
+
+        A delay is a floor and not an appointment: it says the run may not
+        start before then, and the Review itself says the same in its
+        `start_after`, so a job that fires early because the delay was pushed
+        back finds nothing to do.
+        """
+        ...
 
 
 class ArqReviewQueue:
@@ -36,10 +48,14 @@ class ArqReviewQueue:
     to run, so a dropped job costs a re-run, not data.
     """
 
-    async def enqueue(self, review_id: uuid.UUID) -> None:
+    async def enqueue(
+        self, review_id: uuid.UUID, delay: timedelta | None = None
+    ) -> None:
         pool = await create_pool(redis_settings())
         try:
-            await pool.enqueue_job(RUN_REVIEW_JOB, str(review_id))
+            await pool.enqueue_job(
+                RUN_REVIEW_JOB, str(review_id), _defer_by=delay
+            )
         finally:
             await pool.aclose()
 

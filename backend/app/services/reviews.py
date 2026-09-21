@@ -11,6 +11,12 @@ visible one.
 Some Reviews nobody asks for: they are due once a month and the worker's cron
 starts them. The 1st is when they should happen, not the only moment they can,
 so opening the Inbox catches up on any the worker missed.
+
+Others an event asks for, and one of those waits before it starts. Confirming
+an Import is the user saying "look at what I just loaded", and loading three
+files in a row is one such moment rather than three: the Review is deferred a
+couple of minutes, and each Import that arrives while it is still queued joins
+it and pushes its start back again.
 """
 
 import asyncio
@@ -18,14 +24,14 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date as Date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
 from app.inflation import IndexProvider, IndexSource, get_index_source
 from app.llm import LLMClient, get_llm_client
-from app.models import Review
+from app.models import Import, Review
 from app.models.enums import (
     AGENT_TRIGGERS,
     SCHEDULED_TRIGGERS,
@@ -60,9 +66,16 @@ PRODUCERS: dict[ReviewTrigger, list[Producer]] = {
         propose_budget_adjustments,
     ],
     ReviewTrigger.manual_agent: [review_with_agent],
+    ReviewTrigger.import_finished: [review_with_agent],
 }
 
 WAITING = (ReviewStatus.queued, ReviewStatus.running)
+
+# How long a Review about an Import waits before it starts. Long enough that a
+# second file confirmed right after the first joins the same run, short enough
+# that the user is still looking at the screen when what they loaded comes back
+# with something to say about it.
+SETTLING = timedelta(minutes=2)
 
 # How long the Inbox keeps waiting for a Review before deciding nobody is
 # coming. A worker that is down or a wakeup Redis dropped would otherwise leave
@@ -139,6 +152,57 @@ async def _create_scheduled(
         return None
 
 
+async def review_the_import(
+    db: AsyncSession,
+    record: Import,
+    clock: Clock,
+    queue: ReviewQueue,
+) -> Review:
+    """
+    Have the agent look over what an Import just brought in.
+
+    Either it starts a Review of its own or it joins the one still waiting,
+    which is what makes two files confirmed a minute apart one run over both.
+    Joining pushes the start back, so the run only begins once the Imports have
+    stopped arriving; the job already queued for the earlier moment will find
+    the Review not due yet and leave it to the later one.
+    """
+    review = await _waiting_import_review(db, clock)
+    if review is None:
+        review = await create_review(
+            db, ReviewTrigger.import_finished, month_of(clock.today())
+        )
+    review.start_after = clock.now() + SETTLING
+    record.review_id = review.id
+    await db.commit()
+    await queue.enqueue(review.id, SETTLING)
+    return review
+
+
+async def _waiting_import_review(
+    db: AsyncSession, clock: Clock
+) -> Review | None:
+    """
+    The Review still waiting for its moment, if there is one to join.
+
+    Only one whose moment is still ahead: a Review that came due and did not
+    run — because the worker was down, or because it is starting right now —
+    is not something to pile another Import onto. That also keeps "close
+    together" honest, since a Review left queued from last month is long past
+    due and a new Import starts its own rather than joining one about a month
+    it is not in.
+    """
+    result = await db.execute(
+        select(Review)
+        .where(Review.trigger == ReviewTrigger.import_finished)
+        .where(Review.status == ReviewStatus.queued)
+        .where(Review.start_after > clock.now())
+        .order_by(Review.created_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
 async def list_reviews(db: AsyncSession, limit: int = 20) -> list[Review]:
     """The most recent runs, newest first."""
     result = await db.execute(
@@ -147,12 +211,25 @@ async def list_reviews(db: AsyncSession, limit: int = 20) -> list[Review]:
     return list(result.scalars().all())
 
 
-async def waiting_reviews(db: AsyncSession) -> list[Review]:
-    """The Reviews the Inbox should say it is waiting for."""
+async def waiting_reviews(db: AsyncSession, clock: Clock) -> list[Review]:
+    """
+    The Reviews the Inbox should say it is waiting for.
+
+    A run that has not come due yet is not one of them. The Review an Import
+    asks for spends its first couple of minutes waiting for more Imports, and
+    a screen that said "revisando" through that — and disabled the button that
+    asks for a Review — would be saying something that is not happening.
+    """
+    # `created_at` is the database's own clock and `start_after` is the app's,
+    # so each is compared against the one that wrote it. In the worker they are
+    # the same wall clock; only a test pins one of them.
     result = await db.execute(
         select(Review)
         .where(Review.status.in_(WAITING))
         .where(Review.created_at >= datetime.now(UTC) - PATIENCE)
+        .where(
+            or_(Review.start_after.is_(None), Review.start_after <= clock.now())
+        )
         .order_by(Review.created_at.desc())
     )
     return list(result.scalars().all())
@@ -168,6 +245,10 @@ async def run_review(
     sleep: Sleep = asyncio.sleep,
 ) -> Review:
     """Run what the Review's trigger asks for, and record how it went."""
+    review = await get_review(db, review_id)
+    if not await _claim(db, review, clock):
+        return review
+    await db.refresh(review)
     producers = PRODUCERS if producers is None else producers
     outside = Outside(
         clock=clock,
@@ -175,11 +256,6 @@ async def run_review(
         llm=llm or get_llm_client(),
         sleep=sleep,
     )
-    review = await get_review(db, review_id)
-    review.status = ReviewStatus.running
-    review.started_at = datetime.now(UTC)
-    await db.commit()
-
     try:
         for produce in producers[review.trigger]:
             await produce(db, review, outside)
@@ -189,6 +265,31 @@ async def run_review(
         await db.rollback()
         return await _finish(db, review_id, ReviewStatus.failed, error=str(error))
     return await _finish(db, review_id, ReviewStatus.done)
+
+
+async def _claim(db: AsyncSession, review: Review, clock: Clock) -> bool:
+    """
+    Take the Review to run it, if it is this job's to take.
+
+    A Review runs once, and the database is what says whose it is: the row
+    goes from queued to running in one statement, so two jobs that reach it
+    together cannot both find it queued. Anything but queued means another job
+    has already had it, and a `start_after` still ahead means the start was
+    pushed back after this job was scheduled — the job queued for the later
+    moment is the one that will do it.
+    """
+    claimed = await db.execute(
+        update(Review)
+        .where(Review.id == review.id)
+        .where(Review.status == ReviewStatus.queued)
+        .where(
+            or_(Review.start_after.is_(None), Review.start_after <= clock.now())
+        )
+        .values(status=ReviewStatus.running, started_at=datetime.now(UTC))
+        .returning(Review.id)
+    )
+    await db.commit()
+    return claimed.scalars().first() is not None
 
 
 async def _finish(

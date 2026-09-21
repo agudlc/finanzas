@@ -2,10 +2,10 @@
 The agent Review: a hand-written tool-use loop, and the one tool it has.
 
 The loop is deliberately small and ours. It sends the system prompt and the
-core brief, runs whatever tools the model asks for, sends the results back, and
-stops when the model has nothing left to call. There is no framework under it
-yet on purpose (root-idea, phase 2b): what a framework would be doing is meant
-to be visible first.
+brief its trigger asks for, runs whatever tools the model asks for, sends the
+results back, and stops when the model has nothing left to call. There is no
+framework under it yet on purpose (root-idea, phase 2b): what a framework would
+be doing is meant to be visible first.
 
 The tools are a handful of reads (`agent_tools`), recording an Insight, and
 proposing a change (`agent_proposals`). None of them changes anything the user
@@ -39,12 +39,12 @@ from app.services.agent_proposals import (
     propose_through_tool,
 )
 from app.services.agent_tools import TOOLS as READ_TOOLS, Reading, read
-from app.services.brief import core_brief
+from app.services.brief import brief
 from app.services.outside import Outside
 
 # Bumped whenever the system prompt changes, so a run can be read against the
 # words that produced it rather than against today's.
-PROMPT_VERSION = "2026-09-d"
+PROMPT_VERSION = "2026-09-e"
 
 # The brief is already complete and the tools only fill in around it, so a run
 # that has not finished in ten turns is looping rather than working.
@@ -102,6 +102,11 @@ How to decide what to say:
   in the wrong place is a recategorization as well. Propose a Recurring
   Expense only for a charge you can see in several months, and read the
   templates first: one that exists is not proposed again.
+- When the brief says an Import has just finished, that is what the run is
+  about: go through those Transactions for one filed in the wrong Category,
+  for a description that keeps arriving and belongs in a Categorization Rule,
+  and for a charge that looks like it comes every month. The rest of the month
+  is context for those, not the subject.
 - Point at the numbers in the brief. "Gastaste 120.000 en Delivery, 40% más que
   el límite" is worth saying; "cuidado con los gastos" is not.
 - Do not repeat an observation already recorded in the last two months, and do
@@ -175,7 +180,7 @@ async def review_with_agent(
     review.input_tokens = 0
     review.output_tokens = 0
     messages: list[dict] = [
-        {"role": "user", "content": await core_brief(db, review, outside.clock)}
+        {"role": "user", "content": await brief(db, review, outside.clock)}
     ]
     # Settled before the first turn and kept for the whole run: what the tools
     # may read cannot move under the model halfway through a conversation.

@@ -131,6 +131,8 @@ class SuggestionKind(str, enum.Enum):
     add_transaction = "add_transaction"
     set_budget = "set_budget"
     recategorize_transaction = "recategorize_transaction"
+    add_categorization_rule = "add_categorization_rule"
+    add_recurring_expense = "add_recurring_expense"
 
 
 class SuggestionStatus(str, enum.Enum):

@@ -9,7 +9,6 @@ match a description the longest pattern wins, so "mercado libre" beats
 import uuid
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import CategorizationRule
@@ -39,21 +38,60 @@ async def list_rules(db: AsyncSession) -> list[CategorizationRule]:
     return list(result.scalars().all())
 
 
+async def rule_for(db: AsyncSession, pattern: str) -> CategorizationRule | None:
+    """
+    The rule that already maps that pattern, if there is one.
+
+    Case-insensitively, which is looser than the unique constraint on purpose:
+    matching ignores case, so a rule for "PedidosYa" and one for "pedidosya"
+    are the same rule said twice, whatever the database would let through.
+    Lowered on both sides rather than case-folded, because the comparison is
+    the database's and `lower()` is the only one of the two it knows.
+    """
+    result = await db.execute(
+        select(CategorizationRule).where(
+            func.lower(CategorizationRule.pattern) == pattern.strip().lower()
+        )
+    )
+    return result.scalars().first()
+
+
+async def check_rule(db: AsyncSession, data: CategorizationRuleCreate) -> None:
+    """Everything learning it would check, without learning anything."""
+    await _checked(db, data)
+
+
+async def build_rule(
+    db: AsyncSession, data: CategorizationRuleCreate
+) -> CategorizationRule:
+    """
+    A checked rule, added to the session but not committed.
+
+    The commit is the caller's, so a rule learned by accepting a Suggestion is
+    written in the same commit as the Suggestion that proposed it.
+    """
+    pattern = await _checked(db, data)
+    rule = CategorizationRule(**{**data.model_dump(), "pattern": pattern})
+    db.add(rule)
+    # The id is the column default, which only exists once the row is flushed.
+    await db.flush()
+    return rule
+
+
+async def _checked(db: AsyncSession, data: CategorizationRuleCreate) -> str:
+    """The pattern as it would be stored, held to what a new rule must be."""
+    await get_category(db, data.category_id)
+    pattern = data.pattern.strip()
+    if await rule_for(db, pattern) is not None:
+        raise Conflict(f"a Categorization Rule for '{pattern}' already exists")
+    return pattern
+
+
 async def create_rule(
     db: AsyncSession, data: CategorizationRuleCreate
 ) -> CategorizationRule:
-    await get_category(db, data.category_id)
-    rule = CategorizationRule(
-        **{**data.model_dump(), "pattern": data.pattern.strip()}
-    )
-    db.add(rule)
-    try:
-        await db.commit()
-    except IntegrityError as error:
-        await db.rollback()
-        raise Conflict(
-            f"a Categorization Rule for '{data.pattern.strip()}' already exists"
-        ) from error
+    rule = await build_rule(db, data)
+    await db.commit()
     await db.refresh(rule)
     return rule
 

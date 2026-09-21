@@ -12,11 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clock import Clock, get_clock
 from app.database import get_db
 from app.queue import ReviewQueue, get_review_queue
-from app.schemas.review import Inbox
+from app.schemas.review import Inbox, InboxSuggestion
 from app.services.reviews import ensure_scheduled_reviews, waiting_reviews
 from app.services.suggestions import (
     expire_overdue_suggestions,
     pending_suggestions,
+    possible_matches,
 )
 
 router = APIRouter(prefix="/inbox", tags=["inbox"])
@@ -31,8 +32,14 @@ async def read_inbox(
     await expire_overdue_suggestions(db, clock)
     await ensure_scheduled_reviews(db, clock, queue)
     pending = await pending_suggestions(db)
+    matches = await possible_matches(db, pending)
     return Inbox(
-        suggestions=pending,
+        suggestions=[
+            InboxSuggestion.model_validate(one).model_copy(
+                update={"possible_match": matches.get(one.id)}
+            )
+            for one in pending
+        ],
         pending_count=len(pending),
         reviews=await waiting_reviews(db),
     )

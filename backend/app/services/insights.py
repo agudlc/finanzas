@@ -52,22 +52,36 @@ async def waiting_in(db: AsyncSession, month: Date) -> list[Insight]:
     return list(result.scalars().all())
 
 
-async def recent(db: AsyncSession, month: Date) -> list[Insight]:
+async def between(
+    db: AsyncSession, first_month: Date, month: Date
+) -> list[Insight]:
     """
-    What has already been said lately, dismissed or not, oldest first.
+    Every Insight from `first_month` to `month`, oldest first.
 
-    This is what goes into the brief, so the Review can tell the user
-    something new instead of the same thing again. Dismissed ones are here
-    too: having read an observation does not make it untrue.
+    Dismissed ones are here too: having read an observation does not make it
+    untrue.
     """
-    month = month_of(month)
     result = await db.execute(
         select(Insight)
-        .where(Insight.month >= add_months(month, -RECENT_MONTHS))
-        .where(Insight.month <= month)
+        .where(Insight.month >= month_of(first_month))
+        .where(Insight.month <= month_of(month))
         .order_by(Insight.created_at)
     )
     return list(result.scalars().all())
+
+
+async def recent(db: AsyncSession, month: Date, earliest: Date) -> list[Insight]:
+    """
+    What has already been said lately, oldest first.
+
+    This is what goes into the brief, so the Review can tell the user
+    something new instead of the same thing again. `earliest` is the lookback
+    floor: the window is the shorter of the two, so a quarter's worth of
+    history is never three months and one more.
+    """
+    month = month_of(month)
+    first = max(add_months(month, -RECENT_MONTHS), earliest)
+    return await between(db, first, month)
 
 
 async def get_insight(db: AsyncSession, insight_id: uuid.UUID) -> Insight:

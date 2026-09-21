@@ -8,6 +8,10 @@ something the user cannot see for themselves.
 
 It is written in English, like the rest of the code; what comes back is the
 user's, and the system prompt is where that is asked for in Spanish.
+
+How it writes a section, a figure, a Category name and a proposal is public,
+because the read tools answer in the same words: whatever the agent reaches
+for, it is reading one language and not two.
 """
 
 import uuid
@@ -24,6 +28,7 @@ from app.months import format_month
 from app.services import insights as insights_service
 from app.services.budgets import budgets_in, progress_of
 from app.services.categories import list_categories
+from app.services.lookback import earliest_month_for
 from app.services.money import MoneyConverter, converter_for
 from app.services.settings import get_settings
 from app.services.suggestions import pending_suggestions, rejected_since
@@ -36,23 +41,24 @@ async def core_brief(db: AsyncSession, review: Review, clock: Clock) -> str:
     currency = (await get_settings(db)).display_currency
     converter = await converter_for(db, clock)
     names = await _category_names(db)
+    earliest = await earliest_month_for(db, month)
     return "\n\n".join(
         [
-            _header(month, clock, currency),
+            _header(month, clock, currency, earliest),
             await _spending(db, month, currency, converter),
             await _budgets(db, month, clock, converter, names),
             await _pending(db, names),
-            await _rejections(db, month, names),
-            await _insights(db, month),
+            await _rejections(db, month, names, earliest),
+            await _insights(db, month, earliest),
         ]
     )
 
 
-def _section(title: str, lines: list[str], when_empty: str) -> str:
+def section(title: str, lines: list[str], when_empty: str) -> str:
     return "\n".join([f"## {title}", *(lines or [when_empty])])
 
 
-def _figure(value: Decimal) -> str:
+def figure(value: Decimal) -> str:
     """
     An amount written plainly, so there is nothing to misread.
 
@@ -66,17 +72,21 @@ async def _category_names(db: AsyncSession) -> dict[uuid.UUID, str]:
     return {one.id: one.name for one in await list_categories(db)}
 
 
-def _named(names: dict[uuid.UUID, str], category_id: str | uuid.UUID) -> str:
+def named(names: dict[uuid.UUID, str], category_id: str | uuid.UUID) -> str:
     return names.get(uuid.UUID(str(category_id)), "an unknown Category")
 
 
-def _header(month: Date, clock: Clock, currency: Currency) -> str:
+def _header(
+    month: Date, clock: Clock, currency: Currency, earliest: Date
+) -> str:
     return (
         f"The month under review is {format_month(month)}. "
         f"Today is {clock.today().isoformat()}. "
         f"Every amount below is in {currency.value}, the Display Currency, "
         f"converted through each Transaction's own Exchange Rate, and written "
-        f"plainly as 45000.00 — write them back the way the app does."
+        f"plainly as 45000.00 — write them back the way the app does. "
+        f"The user lets you read back as far as {format_month(earliest)} and "
+        f"no further, here or through a tool."
     )
 
 
@@ -93,27 +103,27 @@ async def _spending(
     income, expenses, by_category = await converted_totals(
         db, month, currency, converter
     )
-    return _section(
+    return section(
         "This month so far",
         [
-            f"- Income: {_figure(income)}",
-            f"- Expenses: {_figure(expenses)}",
-            f"- Monthly Result: {_figure(income - expenses)}",
-            *(f"- {one.name}: {_figure(one.total)}" for one in by_category),
+            f"- Income: {figure(income)}",
+            f"- Expenses: {figure(expenses)}",
+            f"- Monthly Result: {figure(income - expenses)}",
+            *(f"- {one.name}: {figure(one.total)}" for one in by_category),
         ],
         "- Nothing has been recorded this month yet.",
     )
 
 
-async def _budgets(
+async def budget_lines(
     db: AsyncSession,
     month: Date,
     clock: Clock,
     converter: MoneyConverter,
     names: dict[uuid.UUID, str],
-) -> str:
+) -> list[str]:
     """
-    Each Budget against what it has cost and against its Pace.
+    Each Budget of the month against what it has cost and against its Pace.
 
     It reads the Budgets the month already has rather than starting the month
     off a copy of the last one: a Review is a reader, and opening a month is a
@@ -125,16 +135,28 @@ async def _budgets(
         pace = (
             "no Pace, because the month is not the one being lived"
             if progress.pace is None
-            else f"Pace says {_figure(progress.pace)} by today"
+            else f"Pace says {figure(progress.pace)} by today"
         )
         lines.append(
-            f"- {_named(names, budget.category_id)}: "
-            f"limit {_figure(progress.amount)} {progress.currency.value}, "
-            f"spent {_figure(progress.spent)} ({_figure(progress.percentage)}%), "
+            f"- {named(names, budget.category_id)}: "
+            f"limit {figure(progress.amount)} {progress.currency.value}, "
+            f"spent {figure(progress.spent)} ({figure(progress.percentage)}%), "
             f"{pace}, state {progress.state.value}"
         )
-    return _section(
-        "Budgets this month", lines, "- This month has no Budgets set."
+    return lines
+
+
+async def _budgets(
+    db: AsyncSession,
+    month: Date,
+    clock: Clock,
+    converter: MoneyConverter,
+    names: dict[uuid.UUID, str],
+) -> str:
+    return section(
+        "Budgets this month",
+        await budget_lines(db, month, clock, converter, names),
+        "- This month has no Budgets set.",
     )
 
 
@@ -163,10 +185,10 @@ PROPOSALS: dict[SuggestionKind, Callable[[Suggestion, str], str]] = {
 }
 
 
-def _proposal(suggestion: Suggestion, names: dict[uuid.UUID, str]) -> str:
+def proposal(suggestion: Suggestion, names: dict[uuid.UUID, str]) -> str:
     """One proposal in a line: what it would do, not how it is stored."""
     return PROPOSALS[suggestion.kind](
-        suggestion, _named(names, suggestion.payload["category_id"])
+        suggestion, named(names, suggestion.payload["category_id"])
     )
 
 
@@ -178,10 +200,10 @@ async def _pending(db: AsyncSession, names: dict[uuid.UUID, str]) -> str:
     proposed (ADR-0003), and so an observation can point at it.
     """
     lines = [
-        f"- {_proposal(one, names)}. Why: {one.rationale}"
+        f"- {proposal(one, names)}. Why: {one.rationale}"
         for one in await pending_suggestions(db)
     ]
-    return _section(
+    return section(
         "Proposals already waiting in the Inbox",
         lines,
         "- Nothing is waiting in the Inbox.",
@@ -189,7 +211,7 @@ async def _pending(db: AsyncSession, names: dict[uuid.UUID, str]) -> str:
 
 
 async def _rejections(
-    db: AsyncSession, month: Date, names: dict[uuid.UUID, str]
+    db: AsyncSession, month: Date, names: dict[uuid.UUID, str], earliest: Date
 ) -> str:
     """
     What the user said no to lately, and why when they said.
@@ -198,7 +220,7 @@ async def _rejections(
     to take into account rather than a rule: the same proposal can come back.
     """
     lines = []
-    for one in await rejected_since(db, month):
+    for one in await rejected_since(db, month, earliest):
         reason = (
             "no reason given"
             if one.rejection_reason is None
@@ -206,21 +228,21 @@ async def _rejections(
         )
         lines.append(
             f"- in {format_month(one.month)} they said no to "
-            f"{_proposal(one, names)}: {reason}"
+            f"{proposal(one, names)}: {reason}"
         )
-    return _section(
+    return section(
         "Proposals the user rejected recently",
         lines,
         "- The user has not rejected anything recently.",
     )
 
 
-async def _insights(db: AsyncSession, month: Date) -> str:
+async def _insights(db: AsyncSession, month: Date, earliest: Date) -> str:
     lines = [
         f"- {format_month(one.month)} — {one.topic}: {one.body}"
-        for one in await insights_service.recent(db, month)
+        for one in await insights_service.recent(db, month, earliest)
     ]
-    return _section(
+    return section(
         "Observations already recorded this month and in the two before it",
         lines,
         "- Nothing has been observed yet.",

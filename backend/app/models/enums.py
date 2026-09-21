@@ -66,6 +66,18 @@ class AdjustmentKind(str, enum.Enum):
     index = "index"
 
 
+class AgentLookback(str, enum.Enum):
+    """How far back a Review is allowed to read, counted in months."""
+
+    quarter = "quarter"
+    year = "year"
+
+
+# What each lookback is worth in months, with the month under review counting
+# as the first of them: a quarter is that month and the two before it.
+LOOKBACK_MONTHS = {AgentLookback.quarter: 3, AgentLookback.year: 12}
+
+
 class BudgetState(str, enum.Enum):
     """How a Budget's spending stands against its amount and its Pace."""
 

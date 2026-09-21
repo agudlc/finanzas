@@ -7,9 +7,12 @@ stops when the model has nothing left to call. There is no framework under it
 yet on purpose (root-idea, phase 2b): what a framework would be doing is meant
 to be visible first.
 
-The only tool so far is recording an Insight, which changes no data — the agent
-has no write path at all (ADR-0002), so a loop that goes wrong costs the user a
-sentence they disagree with and nothing else. Everything the run leaves behind
+The tools are recording an Insight and a handful of reads (`agent_tools`).
+None of them changes anything — the agent has no write path at all (ADR-0002),
+so a loop that goes wrong costs the user a sentence they disagree with and
+nothing else. What the reads may reach is the user's call, and the loop settles
+it once at the top of the run: everything past the lookback is refused by the
+tool rather than fetched. Everything the run leaves behind
 beyond the Insights — the transcript, what it cost, which prompt asked for it —
 is written on the Review, so a strange observation can be read back to the
 conversation that produced it.
@@ -20,15 +23,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.llm import Reply, ToolCall
 from app.models import Review
 from app.services import insights as insights_service
+from app.services.agent_tools import TOOLS as READ_TOOLS, Reading, read
 from app.services.brief import core_brief
 from app.services.outside import Outside
 
 # Bumped whenever the system prompt changes, so a run can be read against the
 # words that produced it rather than against today's.
-PROMPT_VERSION = "2026-09-a"
+PROMPT_VERSION = "2026-09-b"
 
-# The model has one tool and a brief that is already complete, so a run that
-# has not finished in ten turns is looping rather than working.
+# The brief is already complete and the tools only fill in around it, so a run
+# that has not finished in ten turns is looping rather than working.
 MAX_TURNS = 10
 
 RECORD_INSIGHT = "record_insight"
@@ -40,10 +44,17 @@ You are the coach inside Finanzas, a personal finance app used by one person
 living in Argentina. You are given a brief about one month of their money and
 you say what you notice about it.
 
-You cannot change anything. Your only tool records an Insight: a read-only
-observation that waits in the user's Inbox during the month it is about. If
-something would need data to change, say it as an observation anyway — do not
-pretend to have done it.
+You cannot change anything. The only tool that writes anything records an
+Insight: a read-only observation that waits in the user's Inbox during the
+month it is about. If something would need data to change, say it as an
+observation anyway — do not pretend to have done it.
+
+The other tools read. The brief already holds the month under review, so reach
+for them when a figure in it raises a question — what those Delivery expenses
+actually were, how the month compares with the one before it — and not to
+gather everything first. The user decides how far back you may read; the brief
+says where that floor is, and a tool asked for an older month will tell you so
+instead of answering.
 
 How to decide what to say:
 - Record an Insight only when you have something specific and useful. Two or
@@ -67,36 +78,36 @@ When you have nothing left to record, answer in one short sentence and stop
 calling tools.
 """.strip()
 
-TOOLS = [
-    {
-        "name": RECORD_INSIGHT,
-        "description": (
-            "Record one observation about the month under review. It waits in "
-            "the user's Inbox and changes no data. Call it once per "
-            "observation."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "topic": {
-                    "type": "string",
-                    "description": (
-                        "A few words naming what this is about, in Spanish, "
-                        "at most 100 characters."
-                    ),
-                },
-                "body": {
-                    "type": "string",
-                    "description": (
-                        "The observation itself, in rioplatense Spanish: one "
-                        "short paragraph, with the figures it rests on."
-                    ),
-                },
+RECORD = {
+    "name": RECORD_INSIGHT,
+    "description": (
+        "Record one observation about the month under review. It waits in "
+        "the user's Inbox and changes no data. Call it once per observation."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": (
+                    "A few words naming what this is about, in Spanish, at "
+                    "most 100 characters."
+                ),
             },
-            "required": ["topic", "body"],
+            "body": {
+                "type": "string",
+                "description": (
+                    "The observation itself, in rioplatense Spanish: one "
+                    "short paragraph, with the figures it rests on."
+                ),
+            },
         },
-    }
-]
+        "required": ["topic", "body"],
+    },
+}
+
+# What the model is offered: the one tool that writes, and the reads.
+TOOLS = [RECORD, *READ_TOOLS]
 
 # What the Review says about itself when the model kept calling tools past the
 # cap. The run is not a failure: whatever it recorded before the cap stands.
@@ -123,6 +134,9 @@ async def review_with_agent(
     messages: list[dict] = [
         {"role": "user", "content": await core_brief(db, review, outside.clock)}
     ]
+    # Settled before the first turn and kept for the whole run: what the tools
+    # may read cannot move under the model halfway through a conversation.
+    reading = await Reading.of(db, review, outside.clock)
 
     for _ in range(MAX_TURNS):
         reply = await outside.llm.reply(SYSTEM_PROMPT, messages, TOOLS)
@@ -134,14 +148,16 @@ async def review_with_agent(
         messages.append(reply.as_turn())
         if not reply.tool_calls:
             break
-        messages.append(_results(db, review, reply))
+        messages.append(await _results(db, review, reading, reply))
     else:
         review.note = HIT_THE_CAP
 
     review.transcript = messages
 
 
-def _results(db: AsyncSession, review: Review, reply: Reply) -> dict:
+async def _results(
+    db: AsyncSession, review: Review, reading: Reading, reply: Reply
+) -> dict:
     """The user turn that answers every tool the model just called."""
     return {
         "role": "user",
@@ -149,23 +165,26 @@ def _results(db: AsyncSession, review: Review, reply: Reply) -> dict:
             {
                 "type": "tool_result",
                 "tool_use_id": call.id,
-                "content": _run_tool(db, review, call),
+                "content": await _run_tool(db, review, reading, call),
             }
             for call in reply.tool_calls
         ],
     }
 
 
-def _run_tool(db: AsyncSession, review: Review, call: ToolCall) -> str:
+async def _run_tool(
+    db: AsyncSession, review: Review, reading: Reading, call: ToolCall
+) -> str:
     """
     Do what the model asked, and answer it in a sentence it can act on.
 
     A tool that cannot be run is answered rather than raised: the model asking
-    for something that does not exist is a thing to correct within the run, not
-    a reason to lose the Insights it already recorded.
+    for something that does not exist, or for a month it is not allowed, is a
+    thing to correct within the run, not a reason to lose the Insights it
+    already recorded.
     """
     if call.name != RECORD_INSIGHT:
-        return f"There is no tool called {call.name}."
+        return await read(reading, call.name, call.arguments)
     topic = str(call.arguments.get("topic") or "").strip()
     body = str(call.arguments.get("body") or "").strip()
     if not topic or not body:

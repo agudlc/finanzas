@@ -258,9 +258,11 @@ SEEDED_TABLES = {
     "categories": "INSERT INTO categories (id, name, color, icon, is_default, type)"
     " VALUES (:id, :name, :color, :icon, :is_default,"
     " CAST(:type AS transactiontype))",
-    "settings": "INSERT INTO settings (id, display_currency, default_rate_type)"
+    "settings": "INSERT INTO settings"
+    " (id, display_currency, default_rate_type, agent_lookback)"
     " VALUES (:id, CAST(:display_currency AS currency),"
-    " CAST(:default_rate_type AS ratetype))",
+    " CAST(:default_rate_type AS ratetype),"
+    " CAST(:agent_lookback AS agentlookback))",
 }
 
 

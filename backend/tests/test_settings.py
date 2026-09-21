@@ -25,18 +25,40 @@ async def test_the_default_rate_type_can_be_changed(client):
     assert (await client.get("/settings/")).json()["default_rate_type"] == "blue"
 
 
-async def test_one_setting_can_be_changed_without_touching_the_other(client):
+async def test_settings_start_with_a_quarter_of_history_for_the_agent(client):
+    response = await client.get("/settings/")
+
+    assert response.json()["agent_lookback"] == "quarter", (
+        "the smaller of the two: history leaving the app is the user's to widen"
+    )
+
+
+async def test_the_agent_lookback_can_be_widened_to_a_year(client):
+    await client.patch("/settings/", json={"agent_lookback": "year"})
+
+    assert (await client.get("/settings/")).json()["agent_lookback"] == "year"
+
+
+async def test_one_setting_can_be_changed_without_touching_the_others(client):
     await client.patch("/settings/", json={"default_rate_type": "mep"})
 
     settings = (await client.get("/settings/")).json()
-    assert settings == {"display_currency": "ARS", "default_rate_type": "mep"}
+    assert settings == {
+        "display_currency": "ARS",
+        "default_rate_type": "mep",
+        "agent_lookback": "quarter",
+    }
 
 
 async def test_a_fresh_database_already_holds_the_settings_record(client):
     """The migrations seed it, so it is never conjured up by the first read."""
     response = await client.get("/settings/")
 
-    assert response.json() == {"display_currency": "ARS", "default_rate_type": "card"}
+    assert response.json() == {
+        "display_currency": "ARS",
+        "default_rate_type": "card",
+        "agent_lookback": "quarter",
+    }
 
 
 async def test_the_display_currency_cannot_be_blanked(client):

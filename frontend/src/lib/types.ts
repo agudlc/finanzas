@@ -4,6 +4,7 @@ export type Currency = 'ARS' | 'USD';
 export type TransactionType = 'expense' | 'income';
 export type RateType = 'official' | 'blue' | 'mep' | 'ccl' | 'card' | 'manual';
 export type ConfirmationStatus = 'estimated' | 'confirmed';
+export type AgentLookback = 'quarter' | 'year';
 export type BudgetState = 'on_pace' | 'ahead_of_pace' | 'warning' | 'over';
 export type NumberFormat = 'comma_decimal' | 'dot_decimal';
 export type SignConvention =
@@ -129,6 +130,8 @@ export interface MonthlySummary {
 export interface Settings {
   display_currency: Currency;
   default_rate_type: RateType;
+  /** How far back a Review may read: the month it is about, and before it. */
+  agent_lookback: AgentLookback;
 }
 
 /** How much prices moved in one month, in percentage points: 1.659 is 1.659%. */

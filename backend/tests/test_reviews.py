@@ -12,6 +12,15 @@ from tests.test_recurring_expenses import create_recurring
 
 
 async def run_review(client) -> dict:
+    """"Revisar ahora", and the deterministic half of what it asked for."""
+    [deterministic] = [
+        one for one in await press_revisar_ahora(client) if one["trigger"] == "manual"
+    ]
+    return deterministic
+
+
+async def press_revisar_ahora(client) -> list[dict]:
+    """Both Reviews the button asks for: the arithmetic and the agent."""
     response = await client.post("/reviews/")
     response.raise_for_status()
     return response.json()
@@ -137,7 +146,8 @@ async def test_recent_reviews_are_listed_newest_first(client):
 
     listed = (await client.get("/reviews/")).json()
 
-    assert [one["id"] for one in listed] == [second["id"], first["id"]]
+    asked_for = [one["id"] for one in listed if one["trigger"] == "manual"]
+    assert asked_for == [second["id"], first["id"]]
 
 
 async def test_a_review_that_does_not_exist_returns_404(client):
@@ -168,6 +178,7 @@ async def test_the_inbox_shows_a_review_that_is_still_waiting(client, queue):
         "recurring_monthly",
         "month_end",
         "manual",
+        "manual_agent",
     }, "the month's own Reviews are caught up on by the read, and held too"
     assert review["id"] in [one["id"] for one in waiting["reviews"]]
     assert all(one["status"] == "queued" for one in waiting["reviews"])

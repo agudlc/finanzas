@@ -81,12 +81,22 @@ class ReviewTrigger(str, enum.Enum):
     recurring_monthly = "recurring_monthly"
     month_end = "month_end"
     manual = "manual"
+    manual_agent = "manual_agent"
 
 
 # The triggers that come due on their own, once each per month. The others are
 # the user asking or an event that can happen any number of times in a month,
 # so only these are the ones a month can be missing.
 SCHEDULED_TRIGGERS = (ReviewTrigger.recurring_monthly, ReviewTrigger.month_end)
+
+# What "Revisar ahora" asks for, which is the opposite of scheduled: the
+# arithmetic and the agent, as two Reviews.
+MANUAL_TRIGGERS = (ReviewTrigger.manual, ReviewTrigger.manual_agent)
+
+# The triggers whose Reviews call the model. Deterministic and agent work never
+# share a Review (ADR-0003), so the trigger alone says whether one used the
+# agent, and nothing has to be set while the run is going.
+AGENT_TRIGGERS = (ReviewTrigger.manual_agent,)
 
 
 class ReviewStatus(str, enum.Enum):

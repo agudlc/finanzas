@@ -460,6 +460,15 @@ class Review(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(String(250), nullable=True)
 
+    # What the agent run was: the whole exchange as it happened, what it cost,
+    # and which prompt asked for it. Null on a deterministic Review, because
+    # there was nothing to say to anyone. The transcript is kept so a strange
+    # Insight can be read back to where it came from.
+    transcript: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -513,3 +522,35 @@ class Suggestion(Base):
 
     def __repr__(self):
         return f"<Suggestion {self.kind.value} {self.dedupe_key}>"
+
+
+class Insight(Base):
+    """
+    A read-only observation the agent produced during a Review.
+
+    It changes no data, which is why it is not a Suggestion: anything that does
+    not fit a Suggestion kind is said here instead (ADR-0002). It belongs to
+    the month it was produced in and only waits in the Inbox during that month,
+    dismissed or not; afterwards it stays as history later Reviews can read,
+    which is why dismissing it is a timestamp and never a delete.
+    """
+
+    __tablename__ = "insights"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    review_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("reviews.id"))
+    # The month it is about, stored as its first day.
+    month: Mapped[Date] = mapped_column(DateColumn)
+    # A few words naming what it is about, so the Inbox can be skimmed.
+    topic: Mapped[str] = mapped_column(String(100))
+    body: Mapped[str] = mapped_column(Text)
+
+    dismissed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self):
+        return f"<Insight {self.topic}>"

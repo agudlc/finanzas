@@ -31,6 +31,22 @@ class ReviewResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ReviewDetail(ReviewResponse):
+    """
+    One Review, and what the run actually was.
+
+    None of this is in the list or the Inbox, which are polled: the whole
+    exchange with the model, what it cost and which prompt asked for it are
+    read when one Review needs explaining. All null on a deterministic Review,
+    which talked to nobody.
+    """
+
+    transcript: list | None
+    input_tokens: int | None
+    output_tokens: int | None
+    prompt_version: str | None
+
+
 class AddTransactionPayload(BaseModel):
     """
     What an `add_transaction` Suggestion would record.
@@ -145,11 +161,34 @@ class SuggestionReject(BaseModel):
     reason: str | None = Field(default=None, max_length=250)
 
 
+class InsightResponse(BaseModel):
+    """
+    A read-only observation, as the Inbox hands it over.
+
+    There is nothing to accept: the only thing the user does with one is read
+    it and say so, which is what `dismissed_at` records.
+    """
+
+    id: uuid.UUID
+    review_id: uuid.UUID
+    # The month it is about, stored as its first day.
+    month: Date
+    topic: str
+    body: str
+    dismissed_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class Inbox(BaseModel):
     """Everything the Inbox screen needs in one read."""
 
     suggestions: list[InboxSuggestion]
     pending_count: int
+    # This month's observations the user has not dismissed. An Insight from an
+    # earlier month is history, so it is not here however undismissed it is.
+    insights: list[InsightResponse]
     # The Reviews queued or running right now, so the screen can say "buscando"
     # and poll faster until they finish.
     reviews: list[ReviewResponse]

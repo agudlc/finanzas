@@ -21,6 +21,7 @@ import type {
   ImportPreview,
   Inbox,
   ImportProfile,
+  Insight,
   ImportRecord,
   InflationIndex,
   InstallmentPurchase,
@@ -381,9 +382,22 @@ export function useInbox() {
   });
 }
 
-/** "Revisar ahora": the Review comes back queued, and the poll picks it up. */
+/**
+ * "Revisar ahora": two Reviews come back queued, and the poll picks them up.
+ *
+ * The arithmetic and the agent are separate runs, so the proposals arrive even
+ * when the model cannot be reached.
+ */
 export function useRunReview() {
-  return useWrite(() => api.post<Review>('/reviews/', {}), INBOX);
+  return useWrite(() => api.post<Review[]>('/reviews/', {}), INBOX);
+}
+
+/** "Leído": the observation leaves the Inbox and stays as history. */
+export function useDismissInsight() {
+  return useWrite(
+    (id: string) => api.post<Insight>(`/insights/${id}/dismiss`, {}),
+    INBOX,
+  );
 }
 
 /**

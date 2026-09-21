@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clock import Clock
 from app.models import Suggestion, Transaction
 from app.models.enums import SuggestionKind, SuggestionStatus, TransactionType
-from app.months import last_day_of_month, month_of
+from app.months import add_months, last_day_of_month, month_of
 from app.schemas.budget import BudgetCreate
 from app.schemas.review import (
     AddTransactionPayload,
@@ -112,6 +112,31 @@ async def pending_suggestions(db: AsyncSession) -> list[Suggestion]:
         select(Suggestion)
         .where(Suggestion.status == SuggestionStatus.pending)
         .order_by(Suggestion.month.desc(), Suggestion.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+# How far back "the user already said no to this" reaches. Longer than the
+# Insight window, because a rejection is a standing instruction of sorts:
+# three months of them is what keeps a Review from asking the same question
+# over and over. A no from last summer says little about this month's rent.
+REJECTION_MONTHS = 3
+
+
+async def rejected_since(db: AsyncSession, month: Date) -> list[Suggestion]:
+    """
+    What the user said no to in the months up to `month`, newest first.
+
+    Rejections are kept and fed back into later Reviews (ADR-0002), so this is
+    what "remember what I turned down" reads.
+    """
+    month = month_of(month)
+    result = await db.execute(
+        select(Suggestion)
+        .where(Suggestion.status == SuggestionStatus.rejected)
+        .where(Suggestion.month >= add_months(month, -REJECTION_MONTHS))
+        .where(Suggestion.month <= month)
+        .order_by(Suggestion.month.desc(), Suggestion.resolved_at.desc())
     )
     return list(result.scalars().all())
 

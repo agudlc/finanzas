@@ -31,6 +31,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://agudlc:finagudlc@db:5432/finagudlc
       REDIS_URL: redis://redis:6379
+      # The Console API key the agent Reviews call Claude with. Without it the
+      # app runs and every deterministic Review still proposes; only the agent
+      # half of "Revisar ahora" fails, and says why.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
     volumes:
       - ./backend:/app
     depends_on:
@@ -51,6 +56,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://agudlc:finagudlc@db:5432/finagudlc
       REDIS_URL: redis://redis:6379
+      # The Console API key the agent Reviews call Claude with. Without it the
+      # app runs and every deterministic Review still proposes; only the agent
+      # half of "Revisar ahora" fails, and says why.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
     volumes:
       - ./backend:/app
     depends_on:

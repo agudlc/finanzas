@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { RefreshCw } from 'lucide-react';
 
+import InsightCard from '@/components/inbox/InsightCard';
 import SuggestionCard from '@/components/inbox/SuggestionCard';
 import { Button } from '@/components/ui/button';
 import { Empty, ErrorText, PageTitle } from '@/components/ui/field';
@@ -13,12 +14,16 @@ export const Route = createFileRoute('/bandeja')({
 });
 
 /**
- * The Inbox: what the app proposes, waiting for the user.
+ * The Inbox: what the app proposes and what it noticed, waiting for the user.
  *
  * A Review runs in the worker, so pressing "Revisar ahora" does not hand back
- * the proposals — it hands back a Review that is queued. The screen says so and
- * polls until it finishes, which is also what makes a worker that is down
+ * the proposals — it hands back Reviews that are queued. The screen says so and
+ * polls until they finish, which is also what makes a worker that is down
  * visible instead of silent.
+ *
+ * Observations sit in their own section rather than among the proposals: there
+ * is nothing to accept in one, and mixing them would make "Aceptar" mean two
+ * different things on the same screen.
  */
 function Bandeja() {
   const inbox = useInbox();
@@ -28,6 +33,8 @@ function Bandeja() {
 
   const working = (inbox.data?.reviews.length ?? 0) > 0;
   const months = groupByMonth(inbox.data?.suggestions ?? []);
+  const insights = inbox.data?.insights ?? [];
+  const empty = months.length === 0 && insights.length === 0;
 
   return (
     <div className="flex w-full max-w-3xl flex-col gap-10">
@@ -47,25 +54,35 @@ function Bandeja() {
 
       {working && (
         <p className="tag">
-          Estoy revisando tus gastos recurrentes y tus presupuestos…
+          Estoy mirando tus gastos recurrentes, tus presupuestos y cómo viene el
+          mes…
         </p>
       )}
 
-      {months.length > 0 ? (
-        months.map(([month, suggestions]) => (
-          <section key={month} className="flex flex-col gap-4">
-            <h2 className="label">{monthName(month)}</h2>
-            {suggestions.map((suggestion) => (
-              <SuggestionCard
-                key={suggestion.id}
-                suggestion={suggestion}
-                categories={categories.data ?? []}
-                category={byId.get(suggestion.payload.category_id)}
-              />
-            ))}
-          </section>
-        ))
-      ) : (
+      {months.map(([month, suggestions]) => (
+        <section key={month} className="flex flex-col gap-4">
+          <h2 className="label">{monthName(month)}</h2>
+          {suggestions.map((suggestion) => (
+            <SuggestionCard
+              key={suggestion.id}
+              suggestion={suggestion}
+              categories={categories.data ?? []}
+              category={byId.get(suggestion.payload.category_id)}
+            />
+          ))}
+        </section>
+      ))}
+
+      {insights.length > 0 && (
+        <section className="flex flex-col gap-4">
+          <h2 className="label">Observaciones</h2>
+          {insights.map((insight) => (
+            <InsightCard key={insight.id} insight={insight} />
+          ))}
+        </section>
+      )}
+
+      {empty && (
         <Empty>
           No hay nada esperándote. Probá "Revisar ahora" si acabás de agregar un
           gasto recurrente.

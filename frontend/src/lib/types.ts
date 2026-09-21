@@ -11,7 +11,11 @@ export type SignConvention =
   | 'positive_is_expense'
   | 'debit_credit_columns';
 export type RowStatus = 'new' | 'duplicate' | 'ignored' | 'needs_category';
-export type ReviewTrigger = 'recurring_monthly' | 'month_end' | 'manual';
+export type ReviewTrigger =
+  | 'recurring_monthly'
+  | 'month_end'
+  | 'manual'
+  | 'manual_agent';
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed';
 export type SuggestionKind = 'add_transaction' | 'set_budget';
 export type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
@@ -296,9 +300,29 @@ export type SuggestionEdits =
   | Partial<AddTransactionPayload>
   | Partial<SetBudgetPayload>;
 
+/**
+ * A read-only observation the agent recorded during a Review.
+ *
+ * There is nothing to accept: the only thing to do with one is read it and say
+ * so, which is what dismissing records. It waits in the Inbox during its month
+ * and stays as history afterwards.
+ */
+export interface Insight {
+  id: string;
+  review_id: string;
+  /** The month it is about, as its first day. */
+  month: string;
+  topic: string;
+  body: string;
+  dismissed_at: string | null;
+  created_at: string;
+}
+
 export interface Inbox {
   suggestions: InboxSuggestion[];
   pending_count: number;
+  /** This month's observations the user has not dismissed yet. */
+  insights: Insight[];
   /** The Reviews queued or running right now. */
   reviews: Review[];
 }

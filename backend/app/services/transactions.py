@@ -1,6 +1,19 @@
+"""
+Recording, changing and removing a Transaction, held to the domain's rules.
+
+Every write that finishes here ends the same way: what it moved, as a Category
+and a day, is handed to the Budget watch, which is what fires a Review for a
+Budget that has just crossed 100%. It lives here rather than in the routes
+because what a write did to the month is the write's own business, and a screen
+is not the only thing that writes. The two builders below are the exception,
+and deliberately: their caller is the one that commits, so it is the one that
+says what moved — the cuotas of an Installment Purchase are one write, not six.
+"""
+
 import uuid
 from datetime import date as Date
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +30,9 @@ from app.schemas.transaction import (
 from app.services.categories import get_category
 from app.services.errors import Conflict, Invalid, NotFound
 from app.services.money import RateEstimator
+
+if TYPE_CHECKING:  # the watch reads Budgets, which read Transactions
+    from app.services.budget_reviews import BudgetWatch
 
 EXCHANGE_RATE_FIELDS = ("exchange_rate", "exchange_rate_type", "exchange_rate_status")
 
@@ -79,11 +95,17 @@ async def build_transaction(
 
 
 async def create_transaction(
-    db: AsyncSession, data: TransactionCreate, estimator: RateEstimator
+    db: AsyncSession,
+    data: TransactionCreate,
+    estimator: RateEstimator,
+    watch: "BudgetWatch",
 ) -> Transaction:
     transaction = await build_transaction(db, data, estimator)
     await db.commit()
     await db.refresh(transaction)
+    await watch.after_spending_changed(
+        db, (transaction.category_id, transaction.date)
+    )
     return transaction
 
 
@@ -92,6 +114,7 @@ async def create_refund(
     original_id: uuid.UUID,
     data: RefundCreate,
     estimator: RateEstimator,
+    watch: "BudgetWatch",
 ) -> Transaction:
     """
     A Refund recorded against the Expense it reverses.
@@ -115,7 +138,7 @@ async def create_refund(
         notes=data.notes,
         refund_of_id=original.id,
     )
-    return await create_transaction(db, refund, estimator)
+    return await create_transaction(db, refund, estimator, watch)
 
 
 async def _checked(
@@ -161,18 +184,44 @@ async def change_transaction(
 
 
 async def update_transaction(
-    db: AsyncSession, transaction_id: uuid.UUID, changes: TransactionUpdate
+    db: AsyncSession,
+    transaction_id: uuid.UUID,
+    changes: TransactionUpdate,
+    watch: "BudgetWatch",
 ) -> Transaction:
+    """
+    The Transaction as the changes leave it, written.
+
+    Where it was and where it is now are both handed to the watch: an Expense
+    moved from March to April, or out of one Category into another, is two
+    Budgets standing somewhere new. The one it left can go over too — what
+    leaves it may be a Refund, and a Category that loses one has spent more.
+    """
+    before = await get_transaction(db, transaction_id)
+    was = (before.category_id, before.date)
     transaction = await change_transaction(db, transaction_id, changes)
     await db.commit()
     await db.refresh(transaction)
+    await watch.after_spending_changed(
+        db, was, (transaction.category_id, transaction.date)
+    )
     return transaction
 
 
-async def delete_transaction(db: AsyncSession, transaction_id: uuid.UUID) -> None:
+async def delete_transaction(
+    db: AsyncSession, transaction_id: uuid.UUID, watch: "BudgetWatch"
+) -> None:
+    """
+    Remove it, and look at the month it leaves behind.
+
+    Removing an Expense lowers what a Category cost and removing a Refund
+    raises it, which is why a delete asks the same question a create does.
+    """
     transaction = await get_transaction(db, transaction_id)
+    was = (transaction.category_id, transaction.date)
     await db.delete(transaction)
     await db.commit()
+    await watch.after_spending_changed(db, was)
 
 
 def _confirm_a_cuota_whose_amount_was_edited(

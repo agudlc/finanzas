@@ -16,6 +16,7 @@ export type ReviewTrigger =
   | 'recurring_monthly'
   | 'month_end'
   | 'import_finished'
+  | 'budget_exceeded'
   | 'manual'
   | 'manual_agent';
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed';

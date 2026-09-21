@@ -9,7 +9,9 @@ something the user cannot see for themselves.
 Every Review gets the core brief; some get more. What a run is for is the
 trigger, and a Review that fires because an Import finished is being asked
 about those rows in particular — so it is handed them, and the Rules that filed
-them, on top of the month they landed in.
+them, on top of the month they landed in. One that fires because a Budget went
+over is being asked about that Category, so it is handed what it was spent on
+this month and what it has cost month by month.
 
 It is written in English, like the rest of the code; what comes back is the
 user's, and the system prompt is where that is asked for in Spanish.
@@ -28,11 +30,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
-from app.models import Import, Review, Suggestion, Transaction
+from app.models import Budget, Import, Review, Suggestion, Transaction
 from app.models.enums import Currency, ReviewTrigger
-from app.months import format_month
+from app.months import format_month, months_from
 from app.services import insights as insights_service
-from app.services.budgets import budgets_in, progress_of
+from app.services.budgets import budgets_in, progress_of, spent_in
 from app.services.categories import list_categories
 from app.services.categorization import list_rules
 from app.services.kinds import KINDS
@@ -41,11 +43,17 @@ from app.services.money import MoneyConverter, converter_for
 from app.services.settings import get_settings
 from app.services.suggestions import pending_suggestions, rejected_since
 from app.services.summary import converted_totals
+from app.services.transactions import in_month
 
 # How many imported Transactions the brief writes out. A statement is a few
 # dozen rows and this is two months of them; past that the run is being asked
 # to read a database rather than a file, and the read tools are how it digs.
 IMPORTED_ROWS = 200
+
+# How many of the Category's own Transactions the brief writes out when a
+# Budget has gone over. One Category in one month is rarely near this, and a
+# Category that is has a shape the totals below show better than the rows.
+CATEGORY_ROWS = 100
 
 
 async def brief(db: AsyncSession, review: Review, clock: Clock) -> str:
@@ -376,10 +384,103 @@ async def _rules(db: AsyncSession, names: dict[uuid.UUID, str]) -> str:
     )
 
 
+async def _what_went_over(
+    db: AsyncSession, review: Review, clock: Clock
+) -> str:
+    """
+    The Budget that was crossed, what it was spent on, and what it usually costs.
+
+    One Category, in three ways of looking at it. The Transactions are what the
+    user actually bought, which is the only place an answer to "why" can come
+    from; the months before it are what says whether this is a bad month or the
+    limit having fallen behind what things cost. The rest of the month is in
+    the core brief above, as context for this rather than as the subject.
+    """
+    budget = await _budget_of(db, review)
+    if budget is None:
+        # The Budget was deleted between the Review being asked for and it
+        # running. There is nothing to look into, and the core brief stands.
+        return "The Budget this Review was about is gone: it was deleted."
+
+    currency = (await get_settings(db)).display_currency
+    converter = await converter_for(db, clock)
+    names = await _category_names(db)
+    category = named(names, budget.category_id)
+    progress = await progress_of(db, budget, clock, converter)
+    lines = [
+        await transaction_line(converter, currency, names, one)
+        for one in await _spent_on(db, budget)
+    ]
+    return "\n\n".join(
+        [
+            f"{category} went over its Budget for "
+            f"{format_month(budget.month)}: limit "
+            f"{figure(progress.amount)} {progress.currency.value}, spent "
+            f"{figure(progress.spent)} ({figure(progress.percentage)}%). "
+            f"That is what this Review is about.",
+            section(
+                f"What {category} was spent on in "
+                f"{format_month(budget.month)}, newest first",
+                lines,
+                "- Nothing is recorded in it, which should not be possible.",
+            ),
+            await _month_by_month(db, budget, currency, converter),
+        ]
+    )
+
+
+async def _budget_of(db: AsyncSession, review: Review) -> Budget | None:
+    """The Budget whose crossing asked for this Review."""
+    result = await db.execute(
+        select(Budget).where(Budget.exceeded_review_id == review.id)
+    )
+    return result.scalars().first()
+
+
+async def _spent_on(db: AsyncSession, budget: Budget) -> list[Transaction]:
+    """That Category's Transactions in the Budget's month, newest first."""
+    result = await db.execute(
+        in_month(
+            select(Transaction).where(
+                Transaction.category_id == budget.category_id
+            ),
+            budget.month,
+        )
+        .order_by(Transaction.date.desc(), Transaction.created_at.desc())
+        .limit(CATEGORY_ROWS)
+    )
+    return list(result.scalars().all())
+
+
+async def _month_by_month(
+    db: AsyncSession,
+    budget: Budget,
+    currency: Currency,
+    converter: MoneyConverter,
+) -> str:
+    """
+    What the Category has cost each month, as far back as the lookback allows.
+
+    A total per month rather than the rows: the question this answers is
+    whether 125% is this month being unusual or the limit having fallen behind,
+    and that is a shape, not a list of purchases.
+    """
+    earliest = await earliest_month_for(db, budget.month)
+    lines = [
+        f"- {format_month(month)}: "
+        f"{figure(await spent_in(db, budget.category_id, month, currency, converter))}"
+        for month in months_from(earliest, budget.month)
+    ]
+    return section(
+        f"What it has cost month by month, in {currency.value}", lines, ""
+    )
+
+
 # What each trigger adds to the core brief. A trigger absent from here is a
 # Review about the month and nothing more.
 Extra = Callable[[AsyncSession, Review, Clock], Awaitable[str]]
 
 EXTRAS: dict[ReviewTrigger, Extra] = {
-    ReviewTrigger.import_finished: _what_was_imported
+    ReviewTrigger.import_finished: _what_was_imported,
+    ReviewTrigger.budget_exceeded: _what_went_over,
 }

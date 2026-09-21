@@ -10,6 +10,7 @@ from app.schemas.installment import (
     InstallmentPurchaseResponse,
 )
 from app.services import installments as service
+from app.services.budget_reviews import BudgetWatch, get_budget_watch
 from app.services.money import RateEstimator, get_rate_estimator
 
 router = APIRouter(prefix="/installment-purchases", tags=["installment purchases"])
@@ -34,8 +35,9 @@ async def create_purchase(
     purchase: InstallmentPurchaseCreate,
     db: AsyncSession = Depends(get_db),
     estimator: RateEstimator = Depends(get_rate_estimator),
+    watch: BudgetWatch = Depends(get_budget_watch),
 ):
-    created = await service.create_purchase(db, purchase, estimator)
+    created = await service.create_purchase(db, purchase, estimator, watch)
     return await _with_cuotas(db, created)
 
 

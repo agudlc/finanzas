@@ -24,6 +24,7 @@ from app.services import (
     imports as service,
     parsing,
 )
+from app.services.budget_reviews import BudgetWatch, get_budget_watch
 from app.services.money import RateEstimator, get_rate_estimator
 
 profiles_router = APIRouter(prefix="/import-profiles", tags=["import profiles"])
@@ -136,9 +137,12 @@ async def confirm_import(
     estimator: RateEstimator = Depends(get_rate_estimator),
     clock: Clock = Depends(get_clock),
     queue: ReviewQueue = Depends(get_review_queue),
+    watch: BudgetWatch = Depends(get_budget_watch),
 ):
     """Records the rows, and asks the agent to look over what came in."""
-    return await service.confirm(db, confirmation, estimator, clock, queue)
+    return await service.confirm(
+        db, confirmation, estimator, clock, queue, watch
+    )
 
 
 @router.delete("/{import_id}", status_code=status.HTTP_204_NO_CONTENT)

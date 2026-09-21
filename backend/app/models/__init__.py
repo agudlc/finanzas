@@ -58,7 +58,14 @@ class Category(Base):
 
 
 class Budget(Base):
-    """A spending limit for one expense Category in one month."""
+    """
+    A spending limit for one expense Category in one month.
+
+    It also points at the Review that fired when its spending crossed 100%.
+    That link is what makes "at most once per Budget" true: the Review is not
+    asked for again however much more is spent, and the next month's Budget is
+    another Budget with a link of its own.
+    """
 
     __tablename__ = "budgets"
     __table_args__ = (
@@ -70,6 +77,13 @@ class Budget(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     currency: Mapped[Currency] = mapped_column(Enum(Currency))
     month: Mapped[Date] = mapped_column(DateColumn)
+
+    # The Review that looked into this Budget going over its limit. Null while
+    # it has not gone over, and on a Budget that was already over before there
+    # was such a Review at all.
+    exceeded_review_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("reviews.id"), nullable=True
+    )
 
 
 class BudgetMonth(Base):

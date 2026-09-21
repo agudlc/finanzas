@@ -21,6 +21,7 @@ without its Transaction, nor the other way round.
 import uuid
 from datetime import UTC, date as Date, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,9 @@ from app.schemas.review import AddTransactionPayload, PossibleMatch
 from app.services.errors import Conflict, NotFound
 from app.services.kinds import KINDS, validated
 from app.services.money import RateEstimator
+
+if TYPE_CHECKING:  # the watch reads Budgets, and a Review reads Suggestions
+    from app.services.budget_reviews import BudgetWatch
 
 # An expired proposal does not block a new one: the month it was about is over,
 # and the same proposal may well make sense again.
@@ -262,8 +266,15 @@ async def accept(
     edits: dict | None,
     estimator: RateEstimator,
     clock: Clock,
+    watch: "BudgetWatch",
 ) -> Suggestion:
-    """Apply what was proposed, with the user's edits merged over it."""
+    """
+    Apply what was proposed, with the user's edits merged over it.
+
+    A kind that records or moves an Expense has moved what a Category cost, so
+    the Budget watch is told, exactly as it is when the user types the same
+    Expense in themselves (ADR-0002).
+    """
     suggestion = await get_suggestion(db, suggestion_id)
     await _require_open(db, suggestion, clock)
     definition = KINDS[suggestion.kind]
@@ -273,7 +284,21 @@ async def accept(
         estimator,
         clock,
     )
-    return await _resolve(db, suggestion, SuggestionStatus.accepted)
+    accepted = await _resolve(db, suggestion, SuggestionStatus.accepted)
+    if definition.spends:
+        await _watch_what_it_moved(db, accepted, watch)
+    return accepted
+
+
+async def _watch_what_it_moved(
+    db: AsyncSession, accepted: Suggestion, watch: "BudgetWatch"
+) -> None:
+    """The Transaction the accepted proposal left behind, handed to the watch."""
+    recorded = await db.get(Transaction, accepted.result_id)
+    if recorded is not None:
+        await watch.after_spending_changed(
+            db, (recorded.category_id, recorded.date)
+        )
 
 
 async def reject(

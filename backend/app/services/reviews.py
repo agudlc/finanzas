@@ -16,7 +16,9 @@ Others an event asks for, and one of those waits before it starts. Confirming
 an Import is the user saying "look at what I just loaded", and loading three
 files in a row is one such moment rather than three: the Review is deferred a
 couple of minutes, and each Import that arrives while it is still queued joins
-it and pushes its start back again.
+it and pushes its start back again. A Budget crossing 100% asks for one too,
+and that one runs at once: what made it happen is the write that just landed,
+and there is nothing more to wait for.
 """
 
 import asyncio
@@ -67,6 +69,7 @@ PRODUCERS: dict[ReviewTrigger, list[Producer]] = {
     ],
     ReviewTrigger.manual_agent: [review_with_agent],
     ReviewTrigger.import_finished: [review_with_agent],
+    ReviewTrigger.budget_exceeded: [review_with_agent],
 }
 
 WAITING = (ReviewStatus.queued, ReviewStatus.running)
@@ -91,15 +94,32 @@ async def get_review(db: AsyncSession, review_id: uuid.UUID) -> Review:
     return review
 
 
-async def create_review(
+async def build_review(
     db: AsyncSession, trigger: ReviewTrigger, month: Date
 ) -> Review:
+    """
+    The Review, added to the session but not committed.
+
+    For a caller that has something else to write in the same breath: a Budget
+    crossing its limit takes the link to the Review and the Review itself in
+    one transaction, so a Budget can never be marked as asked about a Review
+    nobody has.
+    """
     review = Review(
         trigger=trigger,
         month=month_of(month),
         used_agent=trigger in AGENT_TRIGGERS,
     )
     db.add(review)
+    # The id is the column default, which only exists once the row is flushed.
+    await db.flush()
+    return review
+
+
+async def create_review(
+    db: AsyncSession, trigger: ReviewTrigger, month: Date
+) -> Review:
+    review = await build_review(db, trigger, month)
     await db.commit()
     await db.refresh(review)
     return review

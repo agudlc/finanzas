@@ -5,6 +5,10 @@ The purchase is recorded once and produces one estimated Expense per cuota, so
 every month carries its share and the remaining cuotas stand as future
 commitments. Editing the purchase is not supported: delete it and record it
 again.
+
+The cuotas are spending like any other, so the months they land in are handed
+to the Budget watch once they are all written: six cuotas are one thing the
+user did, and the Budget each of them breaks is asked about once.
 """
 
 import uuid
@@ -18,6 +22,7 @@ from app.models.enums import ConfirmationStatus, Currency, TransactionType
 from app.months import add_months
 from app.schemas.installment import InstallmentPurchaseCreate
 from app.schemas.transaction import TransactionCreate
+from app.services.budget_reviews import BudgetWatch
 from app.services.errors import NotFound
 from app.services.money import CENTS, RateEstimator
 from app.services.transactions import build_transaction
@@ -64,7 +69,10 @@ async def cuotas_of(
 
 
 async def create_purchase(
-    db: AsyncSession, data: InstallmentPurchaseCreate, estimator: RateEstimator
+    db: AsyncSession,
+    data: InstallmentPurchaseCreate,
+    estimator: RateEstimator,
+    watch: BudgetWatch,
 ) -> InstallmentPurchase:
     purchase = InstallmentPurchase(
         **data.model_dump(exclude={"exchange_rate_type"})
@@ -99,6 +107,10 @@ async def create_purchase(
 
     await db.commit()
     await db.refresh(purchase)
+    cuotas = await cuotas_of(db, purchase.id)
+    await watch.after_spending_changed(
+        db, *((one.category_id, one.date) for one in cuotas)
+    )
     return purchase
 
 

@@ -15,6 +15,7 @@ from app.schemas.transaction import (
     TransactionUpdate,
 )
 from app.services import transactions as service
+from app.services.budget_reviews import BudgetWatch, get_budget_watch
 from app.services.errors import Invalid
 from app.services.money import RateEstimator, get_rate_estimator
 
@@ -58,8 +59,9 @@ async def create_transaction(
     transaction: TransactionCreate,
     db: AsyncSession = Depends(get_db),
     estimator: RateEstimator = Depends(get_rate_estimator),
+    watch: BudgetWatch = Depends(get_budget_watch),
 ):
-    return await service.create_transaction(db, transaction, estimator)
+    return await service.create_transaction(db, transaction, estimator, watch)
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)
@@ -79,8 +81,11 @@ async def refund_transaction(
     refund: RefundCreate,
     db: AsyncSession = Depends(get_db),
     estimator: RateEstimator = Depends(get_rate_estimator),
+    watch: BudgetWatch = Depends(get_budget_watch),
 ):
-    return await service.create_refund(db, transaction_id, refund, estimator)
+    return await service.create_refund(
+        db, transaction_id, refund, estimator, watch
+    )
 
 
 @router.patch("/{transaction_id}", response_model=TransactionResponse)
@@ -88,13 +93,16 @@ async def update_transaction(
     transaction_id: uuid.UUID,
     changes: TransactionUpdate,
     db: AsyncSession = Depends(get_db),
+    watch: BudgetWatch = Depends(get_budget_watch),
 ):
-    return await service.update_transaction(db, transaction_id, changes)
+    return await service.update_transaction(db, transaction_id, changes, watch)
 
 
 @router.delete("/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_transaction(
-    transaction_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    transaction_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    watch: BudgetWatch = Depends(get_budget_watch),
 ):
-    await service.delete_transaction(db, transaction_id)
+    await service.delete_transaction(db, transaction_id, watch)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

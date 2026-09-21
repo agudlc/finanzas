@@ -77,6 +77,12 @@ class Kind:
         [AsyncSession, BaseModel, RateEstimator, Clock], Awaitable[uuid.UUID]
     ]
     reads: Callable[[AsyncSession, Suggestion, str], Awaitable[str]]
+    # Whether applying it moves what a Category has spent, in which case
+    # `result_id` is the Transaction it moved and the Budget watch is asked to
+    # look at it afterwards. Accepting goes through the same services the
+    # routes do (ADR-0002), and that has to include what a write sets off:
+    # a Budget the user broke by accepting a proposal is a Budget they broke.
+    spends: bool = False
 
 
 def validated[Payload: BaseModel](kind: type[Payload], payload: dict) -> Payload:
@@ -409,6 +415,7 @@ KINDS: dict[SuggestionKind, Kind] = {
         check=_check_add_transaction,
         apply=_apply_add_transaction,
         reads=_reads_add_transaction,
+        spends=True,
     ),
     SuggestionKind.set_budget: Kind(
         payload=SetBudgetPayload,
@@ -433,6 +440,7 @@ KINDS: dict[SuggestionKind, Kind] = {
         check=_check_recategorize,
         apply=_apply_recategorize,
         reads=_reads_recategorize,
+        spends=True,
     ),
     SuggestionKind.add_categorization_rule: Kind(
         payload=AddCategorizationRulePayload,

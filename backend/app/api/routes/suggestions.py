@@ -17,6 +17,7 @@ from app.schemas.review import (
     SuggestionReject,
     SuggestionResponse,
 )
+from app.services.budget_reviews import BudgetWatch, get_budget_watch
 from app.services.money import RateEstimator, get_rate_estimator
 from app.services.suggestions import accept, reject
 
@@ -30,10 +31,11 @@ async def accept_suggestion(
     db: AsyncSession = Depends(get_db),
     estimator: RateEstimator = Depends(get_rate_estimator),
     clock: Clock = Depends(get_clock),
+    watch: BudgetWatch = Depends(get_budget_watch),
 ):
     """Record what was proposed, as it stands or with the edits in the body."""
     return await accept(
-        db, suggestion_id, body.payload if body else None, estimator, clock
+        db, suggestion_id, body.payload if body else None, estimator, clock, watch
     )
 
 

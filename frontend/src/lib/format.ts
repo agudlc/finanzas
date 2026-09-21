@@ -148,6 +148,7 @@ export const REVIEW_TRIGGER_LABEL: Record<ReviewTrigger, string> = {
   recurring_monthly: 'gastos recurrentes',
   month_end: 'cierre de mes',
   import_finished: 'importación',
+  budget_exceeded: 'presupuesto excedido',
   manual: 'a pedido',
   manual_agent: 'a pedido',
 };

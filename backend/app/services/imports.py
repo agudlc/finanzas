@@ -10,7 +10,9 @@ Confirming is also what asks the agent to look over what came in — the Rules
 that filed it are learned from what the user does by hand, so just after an
 Import is when there is most to say about them. That happens after the rows are
 safely recorded: a Review that cannot be queued is one thing the user does not
-get, not a file they have to load again.
+get, not a file they have to load again. The rows are spending like any other,
+so the same moment is when a Budget they pushed past its limit asks for its own
+Review.
 """
 
 import uuid
@@ -33,6 +35,7 @@ from app.schemas.imports import (
 )
 from app.schemas.transaction import TransactionCreate
 from app.services import categorization
+from app.services.budget_reviews import BudgetWatch
 from app.services.errors import Invalid, NotFound
 from app.services.import_profiles import get_profile
 from app.services.money import RateEstimator
@@ -143,6 +146,7 @@ async def confirm(
     estimator: RateEstimator,
     clock: Clock,
     queue: ReviewQueue,
+    watch: BudgetWatch,
 ) -> Import:
     profile = await get_profile(db, data.profile_id)
     keeping = _every_row_categorised([row for row in data.rows if not row.skip])
@@ -173,6 +177,9 @@ async def confirm(
     await _remember(db, keeping)
     await db.commit()
     await review_the_import(db, record, clock, queue)
+    await watch.after_spending_changed(
+        db, *((category_id, row.date) for row, category_id in keeping)
+    )
     await db.refresh(record)
     return record
 

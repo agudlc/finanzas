@@ -2,10 +2,13 @@
 Suggestions: what a Review leaves for the user in the Inbox, and what the user
 does about it.
 
-Producers never write Suggestions themselves; they call `propose`, which is
-where "do not propose this twice" lives. A proposal is identified by its kind
-and its dedupe key ("this template, this month"), so pressing "Revisar ahora"
-twice is harmless, and so is a scheduled Review that runs after a manual one.
+Producers never write Suggestions themselves, and neither does the agent; both
+call `propose`, which is where everything a proposal has to survive lives. The
+payload is checked against its kind and held to the domain rules accepting it
+would check, so a proposal the app could not apply is refused where it is made
+rather than waiting in the Inbox to fail. Then it is identified by its kind and
+its dedupe key ("this template, this month"), so pressing "Revisar ahora" twice
+is harmless, and so is a scheduled Review that runs after a manual one.
 
 Accepting is the other half: the payload — as proposed, or with the user's edits
 merged in — is checked against its kind and then applied through the very
@@ -16,29 +19,20 @@ without its Transaction, nor the other way round.
 """
 
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import UTC, date as Date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
 from app.models import Suggestion, Transaction
-from app.models.enums import SuggestionKind, SuggestionStatus, TransactionType
+from app.models.enums import SuggestionKind, SuggestionStatus
 from app.months import add_months, last_day_of_month, month_of
-from app.schemas.budget import BudgetCreate
-from app.schemas.review import (
-    AddTransactionPayload,
-    PossibleMatch,
-    SetBudgetPayload,
-)
-from app.schemas.transaction import TransactionCreate
-from app.services.budgets import set_budget
-from app.services.errors import Conflict, Invalid, NotFound
+from app.schemas.review import AddTransactionPayload, PossibleMatch
+from app.services.errors import Conflict, NotFound
+from app.services.kinds import KINDS, validated
 from app.services.money import RateEstimator
-from app.services.transactions import build_transaction
 
 # An expired proposal does not block a new one: the month it was about is over,
 # and the same proposal may well make sense again.
@@ -54,12 +48,26 @@ async def propose(
     review_id: uuid.UUID,
     kind: SuggestionKind,
     month: Date,
-    dedupe_key: str,
     payload: dict,
     rationale: str,
 ) -> Suggestion | None:
-    """The Suggestion, or None when this proposal has already been made."""
+    """
+    The Suggestion, or None when this proposal has already been made.
+
+    The payload is validated against the kind and held to the rules accepting
+    it would check before anything is stored, so a proposal that reaches the
+    Inbox is one the user can act on. A payload that does not survive that
+    raises: it is a caller asking for something the app cannot do, which the
+    arithmetic should never do and the agent is told about and can correct.
+
+    Nothing is committed here. The Suggestion lands in the Review's own commit,
+    so a run that falls over halfway proposes nothing at all.
+    """
+    definition = KINDS[kind]
     month = month_of(month)
+    proposed = validated(definition.payload, payload)
+    await definition.check(db, proposed)
+    dedupe_key = definition.key(proposed, month)
     if await _already_proposed(db, kind, dedupe_key):
         return None
     suggestion = Suggestion(
@@ -209,7 +217,7 @@ async def _possible_match(
     already dealt with, and either way not the one waiting here. When several
     fit, the closest amount is the likeliest to be it.
     """
-    proposed = _validated(AddTransactionPayload, suggestion.payload)
+    proposed = validated(AddTransactionPayload, suggestion.payload)
     month = month_of(suggestion.month)
     distance = func.abs(Transaction.amount - proposed.amount)
     result = await db.execute(
@@ -232,59 +240,6 @@ async def get_suggestion(db: AsyncSession, suggestion_id: uuid.UUID) -> Suggesti
     return suggestion
 
 
-async def _apply_add_transaction(
-    db: AsyncSession, payload: dict, estimator: RateEstimator, clock: Clock
-) -> uuid.UUID:
-    """Record the proposed Expense, as if the user had typed it in themselves."""
-    proposed = _validated(AddTransactionPayload, payload)
-    transaction = await build_transaction(
-        db,
-        TransactionCreate(
-            amount=proposed.amount,
-            currency=proposed.currency,
-            type=TransactionType.expense,
-            category_id=proposed.category_id,
-            date=proposed.date,
-            description=proposed.description,
-            is_fixed=proposed.is_fixed,
-            recurring_expense_id=proposed.recurring_expense_id,
-        ),
-        estimator,
-    )
-    # The id is the column default, which only exists once the row is flushed.
-    await db.flush()
-    return transaction.id
-
-
-async def _apply_set_budget(
-    db: AsyncSession, payload: dict, estimator: RateEstimator, clock: Clock
-) -> uuid.UUID:
-    """Set the proposed Budget, as if the user had set it themselves."""
-    proposed = _validated(SetBudgetPayload, payload)
-    budget = await set_budget(
-        db,
-        BudgetCreate(
-            category_id=proposed.category_id,
-            amount=proposed.amount,
-            currency=proposed.currency,
-            month=proposed.month,
-        ),
-        clock,
-    )
-    return budget.id
-
-
-# What accepting a Suggestion of each kind does, and what it leaves behind.
-Applier = Callable[
-    [AsyncSession, dict, RateEstimator, Clock], Awaitable[uuid.UUID]
-]
-
-APPLIERS: dict[SuggestionKind, Applier] = {
-    SuggestionKind.add_transaction: _apply_add_transaction,
-    SuggestionKind.set_budget: _apply_set_budget,
-}
-
-
 async def accept(
     db: AsyncSession,
     suggestion_id: uuid.UUID,
@@ -295,8 +250,12 @@ async def accept(
     """Apply what was proposed, with the user's edits merged over it."""
     suggestion = await get_suggestion(db, suggestion_id)
     await _require_open(db, suggestion, clock)
-    suggestion.result_id = await APPLIERS[suggestion.kind](
-        db, {**suggestion.payload, **(edits or {})}, estimator, clock
+    definition = KINDS[suggestion.kind]
+    suggestion.result_id = await definition.apply(
+        db,
+        validated(definition.payload, {**suggestion.payload, **(edits or {})}),
+        estimator,
+        clock,
     )
     return await _resolve(db, suggestion, SuggestionStatus.accepted)
 
@@ -345,15 +304,3 @@ async def _resolve(
     await db.commit()
     await db.refresh(suggestion)
     return suggestion
-
-
-def _validated[Payload: BaseModel](kind: type[Payload], payload: dict) -> Payload:
-    """The payload as its kind defines it, or a 422 saying what is wrong."""
-    try:
-        return kind.model_validate(payload)
-    except ValidationError as error:
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}"
-            for problem in error.errors()
-        )
-        raise Invalid(f"this is not a valid {kind.__name__}: {problems}") from error

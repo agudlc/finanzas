@@ -95,6 +95,11 @@ async def set_budget(
     return budget
 
 
+async def check_budget(db: AsyncSession, data: BudgetCreate) -> None:
+    """Everything setting it would check, without setting anything."""
+    await _expense_category(db, data.category_id)
+
+
 async def _expense_category(db: AsyncSession, category_id: uuid.UUID):
     """The Category a Budget is allowed to be for."""
     category = await get_category(db, category_id)

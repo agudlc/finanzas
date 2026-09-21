@@ -15,7 +15,6 @@ for, it is reading one language and not two.
 """
 
 import uuid
-from collections.abc import Callable
 from datetime import date as Date
 from decimal import Decimal
 
@@ -23,11 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
 from app.models import Review, Suggestion
-from app.models.enums import Currency, SuggestionKind
+from app.models.enums import Currency
 from app.months import format_month
 from app.services import insights as insights_service
 from app.services.budgets import budgets_in, progress_of
 from app.services.categories import list_categories
+from app.services.kinds import KINDS
 from app.services.lookback import earliest_month_for
 from app.services.money import MoneyConverter, converter_for
 from app.services.settings import get_settings
@@ -160,35 +160,19 @@ async def _budgets(
     )
 
 
-def _budget_proposal(suggestion: Suggestion, category: str) -> str:
-    payload = suggestion.payload
-    return (
-        f"set the {category} Budget for {format_month(suggestion.month)} "
-        f"to {payload['amount']} {payload['currency']}"
-    )
+async def proposal(
+    db: AsyncSession, suggestion: Suggestion, names: dict[uuid.UUID, str]
+) -> str:
+    """
+    One proposal in a line: what it would do, not how it is stored.
 
-
-def _transaction_proposal(suggestion: Suggestion, category: str) -> str:
-    payload = suggestion.payload
-    return (
-        f"record \"{payload['description']}\" in {category}, "
-        f"{payload['amount']} {payload['currency']} on {payload['date']}"
-    )
-
-
-# How each kind reads in a line. A map rather than a cascade, as accepting one
-# dispatches: a new kind has to say how it is written here, instead of being
-# quietly described as the kind that happened to be the fallback.
-PROPOSALS: dict[SuggestionKind, Callable[[Suggestion, str], str]] = {
-    SuggestionKind.add_transaction: _transaction_proposal,
-    SuggestionKind.set_budget: _budget_proposal,
-}
-
-
-def proposal(suggestion: Suggestion, names: dict[uuid.UUID, str]) -> str:
-    """One proposal in a line: what it would do, not how it is stored."""
-    return PROPOSALS[suggestion.kind](
-        suggestion, named(names, suggestion.payload["category_id"])
+    How each kind reads is the kind's own business, so a new one cannot be
+    quietly described as whichever kind happened to be the fallback. Every
+    payload names a Category, which is resolved here because every kind wants
+    it; whatever else a kind has to look up, it looks up itself.
+    """
+    return await KINDS[suggestion.kind].reads(
+        db, suggestion, named(names, suggestion.payload["category_id"])
     )
 
 
@@ -200,7 +184,7 @@ async def _pending(db: AsyncSession, names: dict[uuid.UUID, str]) -> str:
     proposed (ADR-0003), and so an observation can point at it.
     """
     lines = [
-        f"- {proposal(one, names)}. Why: {one.rationale}"
+        f"- {await proposal(db, one, names)}. Why: {one.rationale}"
         for one in await pending_suggestions(db)
     ]
     return section(
@@ -228,7 +212,7 @@ async def _rejections(
         )
         lines.append(
             f"- in {format_month(one.month)} they said no to "
-            f"{proposal(one, names)}: {reason}"
+            f"{await proposal(db, one, names)}: {reason}"
         )
     return section(
         "Proposals the user rejected recently",

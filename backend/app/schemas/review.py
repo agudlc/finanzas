@@ -57,15 +57,30 @@ class AddTransactionPayload(BaseModel):
     one. Anything it does not name is not a field of this kind.
     """
 
-    description: str = Field(min_length=1, max_length=250)
-    category_id: uuid.UUID
-    currency: Currency
-    amount: Decimal = Field(gt=0)
-    date: Date
-    is_fixed: bool = False
-    # Which Recurring Expense this came from. Null would mean a proposal from
-    # somewhere else, which no producer makes yet.
-    recurring_expense_id: uuid.UUID | None = None
+    description: str = Field(
+        min_length=1,
+        max_length=250,
+        description="What the Expense is, as it would read in the list.",
+    )
+    category_id: uuid.UUID = Field(
+        description="The expense Category it goes in."
+    )
+    currency: Currency = Field(description="ARS or USD.")
+    amount: Decimal = Field(gt=0, description="How much, as a positive figure.")
+    date: Date = Field(description='The day it falls on, written "YYYY-MM-DD".')
+    is_fixed: bool = Field(
+        default=False,
+        description="Whether the user would call this Expense unavoidable.",
+    )
+    # Which Recurring Expense this came from. Null is a proposal from somewhere
+    # else, which is what one made by the agent rather than by a template is.
+    recurring_expense_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "The Recurring Expense this is the month's payment of, if it is "
+            "one. Omit it otherwise."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -80,10 +95,38 @@ class SetBudgetPayload(BaseModel):
     case this kind exists for, not an error.
     """
 
-    category_id: uuid.UUID
-    month: Date
-    amount: Decimal = Field(gt=0)
-    currency: Currency
+    category_id: uuid.UUID = Field(
+        description="The expense Category whose Budget this is."
+    )
+    month: Date = Field(
+        description='The month the Budget is for, as its first day: "2026-03-01".'
+    )
+    amount: Decimal = Field(gt=0, description="The limit, as a positive figure.")
+    currency: Currency = Field(description="ARS or USD.")
+
+    model_config = {"extra": "forbid"}
+
+
+class RecategorizeTransactionPayload(BaseModel):
+    """
+    What a `recategorize_transaction` Suggestion would move.
+
+    The smallest kind there is: one Transaction, one Category to file it under
+    instead. Nothing else about the Transaction changes, and the Category has
+    to be of the Transaction's own type — an Expense cannot be filed under an
+    income Category — which is checked when it is proposed and again when it is
+    accepted, because the user may have edited it in between.
+    """
+
+    transaction_id: uuid.UUID = Field(
+        description="The Transaction that is filed in the wrong Category."
+    )
+    category_id: uuid.UUID = Field(
+        description=(
+            "The Category it should be in instead, of the same type as the "
+            "Transaction: an expense Category for an Expense."
+        )
+    )
 
     model_config = {"extra": "forbid"}
 

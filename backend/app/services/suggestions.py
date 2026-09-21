@@ -27,8 +27,10 @@ from app.clock import Clock
 from app.models import Suggestion
 from app.models.enums import SuggestionKind, SuggestionStatus, TransactionType
 from app.months import last_day_of_month, month_of
-from app.schemas.review import AddTransactionPayload
+from app.schemas.budget import BudgetCreate
+from app.schemas.review import AddTransactionPayload, SetBudgetPayload
 from app.schemas.transaction import TransactionCreate
+from app.services.budgets import set_budget
 from app.services.errors import Conflict, Invalid, NotFound
 from app.services.money import RateEstimator
 from app.services.transactions import build_transaction
@@ -117,7 +119,7 @@ async def get_suggestion(db: AsyncSession, suggestion_id: uuid.UUID) -> Suggesti
 
 
 async def _apply_add_transaction(
-    db: AsyncSession, payload: dict, estimator: RateEstimator
+    db: AsyncSession, payload: dict, estimator: RateEstimator, clock: Clock
 ) -> uuid.UUID:
     """Record the proposed Expense, as if the user had typed it in themselves."""
     proposed = _validated(AddTransactionPayload, payload)
@@ -140,11 +142,32 @@ async def _apply_add_transaction(
     return transaction.id
 
 
+async def _apply_set_budget(
+    db: AsyncSession, payload: dict, estimator: RateEstimator, clock: Clock
+) -> uuid.UUID:
+    """Set the proposed Budget, as if the user had set it themselves."""
+    proposed = _validated(SetBudgetPayload, payload)
+    budget = await set_budget(
+        db,
+        BudgetCreate(
+            category_id=proposed.category_id,
+            amount=proposed.amount,
+            currency=proposed.currency,
+            month=proposed.month,
+        ),
+        clock,
+    )
+    return budget.id
+
+
 # What accepting a Suggestion of each kind does, and what it leaves behind.
-Applier = Callable[[AsyncSession, dict, RateEstimator], Awaitable[uuid.UUID]]
+Applier = Callable[
+    [AsyncSession, dict, RateEstimator, Clock], Awaitable[uuid.UUID]
+]
 
 APPLIERS: dict[SuggestionKind, Applier] = {
     SuggestionKind.add_transaction: _apply_add_transaction,
+    SuggestionKind.set_budget: _apply_set_budget,
 }
 
 
@@ -159,7 +182,7 @@ async def accept(
     suggestion = await get_suggestion(db, suggestion_id)
     await _require_open(db, suggestion, clock)
     suggestion.result_id = await APPLIERS[suggestion.kind](
-        db, {**suggestion.payload, **(edits or {})}, estimator
+        db, {**suggestion.payload, **(edits or {})}, estimator, clock
     )
     return await _resolve(db, suggestion, SuggestionStatus.accepted)
 

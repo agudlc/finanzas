@@ -14,7 +14,6 @@ import {
 
 import { api, query } from '@/lib/api';
 import type {
-  AddTransactionPayload,
   BudgetProgress,
   CategorizationRule,
   Category,
@@ -31,6 +30,7 @@ import type {
   Review,
   Settings,
   Suggestion,
+  SuggestionEdits,
   Transaction,
 } from '@/lib/types';
 
@@ -389,11 +389,12 @@ export function useRunReview() {
 /**
  * Accepting a suggestion, as proposed or with the fields the user changed.
  *
- * It records a Transaction, so everything money makes stale, not just the Inbox.
+ * It records a Transaction or sets a Budget, so everything money makes stale,
+ * not just the Inbox.
  */
 export function useAcceptSuggestion() {
   return useWrite(
-    ({ id, payload }: { id: string; payload?: Partial<AddTransactionPayload> }) =>
+    ({ id, payload }: { id: string; payload?: SuggestionEdits }) =>
       api.post<Suggestion>(`/suggestions/${id}/accept`, { payload }),
     [...INBOX, ...MONEY],
   );

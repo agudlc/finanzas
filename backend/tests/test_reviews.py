@@ -164,10 +164,11 @@ async def test_the_inbox_shows_a_review_that_is_still_waiting(client, queue):
 
     waiting = await inbox(client)
 
-    assert [one["trigger"] for one in waiting["reviews"]] == [
+    assert {one["trigger"] for one in waiting["reviews"]} == {
         "recurring_monthly",
+        "month_end",
         "manual",
-    ], "the month's own Review was caught up on by the read, and is held too"
+    }, "the month's own Reviews are caught up on by the read, and held too"
     assert review["id"] in [one["id"] for one in waiting["reviews"]]
     assert all(one["status"] == "queued" for one in waiting["reviews"])
     assert waiting["suggestions"] == []

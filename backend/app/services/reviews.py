@@ -28,7 +28,10 @@ from app.models.enums import SCHEDULED_TRIGGERS, ReviewStatus, ReviewTrigger
 from app.months import month_of
 from app.queue import ReviewQueue
 from app.services.errors import NotFound
-from app.services.producers import propose_recurring_expenses
+from app.services.producers import (
+    propose_budget_adjustments,
+    propose_recurring_expenses,
+)
 
 # A producer is given the Review it is producing for: the month to propose for
 # is the Review's, not today's, so a run that starts after midnight still does
@@ -42,8 +45,11 @@ Producer = Callable[
 # waiting for, and the dedupe keys keep that from stepping on the scheduled runs.
 PRODUCERS: dict[ReviewTrigger, list[Producer]] = {
     ReviewTrigger.recurring_monthly: [propose_recurring_expenses],
-    ReviewTrigger.month_end: [],
-    ReviewTrigger.manual: [propose_recurring_expenses],
+    ReviewTrigger.month_end: [propose_budget_adjustments],
+    ReviewTrigger.manual: [
+        propose_recurring_expenses,
+        propose_budget_adjustments,
+    ],
 }
 
 WAITING = (ReviewStatus.queued, ReviewStatus.running)

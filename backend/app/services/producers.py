@@ -15,17 +15,28 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
-from app.inflation import IndexProvider
-from app.models import AdjustmentRule, RecurringExpense, Review
-from app.models.enums import AdjustmentKind, SuggestionKind
-from app.months import days_in_month, format_month
-from app.services.adjustments import Adjustment, adjust, index_months
-from app.services.money import round_money
+from app.inflation import IPC, IndexProvider
+from app.models import AdjustmentRule, InflationIndex, RecurringExpense, Review
+from app.models.enums import AdjustmentKind, Currency, SuggestionKind
+from app.months import add_months, days_in_month, format_month
+from app.services.adjustments import (
+    HUNDRED,
+    Adjustment,
+    adjust,
+    index_months,
+)
+from app.services.budgets import budget_for, budgets_in, spent_in
+from app.services.money import converter_for, round_money, round_to_thousand
 from app.services.recurring_expenses import (
     last_amount_paid,
     list_recurring_expenses,
 )
 from app.services.suggestions import propose
+
+# How far back the month-end Review looks for the newest published index. The
+# IPC of month M comes out in the middle of M+1, so on the 1st the newest is
+# usually two months old; a year of slack covers a series that fell behind.
+LOOKBACK_MONTHS = 12
 
 MONTH_NAMES = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -41,6 +52,11 @@ def add_transaction_key(recurring_id: uuid.UUID, month: Date) -> str:
     month": the next month asks a different question.
     """
     return f"{recurring_id}:{format_month(month)}"
+
+
+def set_budget_key(category_id: uuid.UUID, month: Date) -> str:
+    """What a `set_budget` proposal is about: this Category, this month."""
+    return f"{category_id}:{format_month(month)}"
 
 
 def _expected_date(template: RecurringExpense, month: Date) -> Date:
@@ -174,4 +190,85 @@ async def propose_recurring_expenses(
                 "recurring_expense_id": str(template.id),
             },
             rationale=_rationale(template, on, paid, base, adjustment),
+        )
+
+
+async def _latest_published(
+    indexes: IndexProvider, month: Date
+) -> InflationIndex | None:
+    """The newest month of the IPC that is out by the time `month` starts."""
+    last = add_months(month, -1)
+    values = await indexes.values_in(add_months(last, -LOOKBACK_MONTHS), last, IPC)
+    return values[-1] if values else None
+
+
+def _budget_rationale(
+    previous: Date,
+    spent: Decimal,
+    budget: Decimal,
+    index: InflationIndex,
+    proposed: Decimal,
+) -> str:
+    """Last month against its limit, and the index that moves it."""
+    return (
+        f"En {_month_name(previous)} gastaste {_amount(spent)} de un "
+        f"presupuesto de {_amount(budget)}. El {index.name} de "
+        f"{_month_name(index.month)} fue "
+        f"{_percentage(index.value)}%, así que propongo {_amount(proposed)}."
+    )
+
+
+async def propose_budget_adjustments(
+    db: AsyncSession, review: Review, clock: Clock, indexes: IndexProvider
+) -> None:
+    """
+    One `set_budget` per ARS Budget of last month, moved by the latest IPC.
+
+    Last month's is the right base because the new month starts as a copy of
+    it: what this proposes is a move of that copy, whether or not it has been
+    made yet. So nothing here writes a Budget — accepting does.
+
+    Dollars are left alone — the Argentine IPC says nothing about them — and so
+    is an amount the adjustment does not actually move.
+    """
+    month = review.month
+    previous = add_months(month, -1)
+    budgets = [
+        one
+        for one in await budgets_in(db, previous)
+        if one.currency is Currency.ARS
+    ]
+    if not budgets:
+        return
+    index = await _latest_published(indexes, month)
+    if index is None:
+        return
+
+    converter = await converter_for(db, clock)
+    factor = 1 + index.value / HUNDRED
+    for budget in budgets:
+        proposed = round_to_thousand(budget.amount * factor)
+        # What the month already has, which is last month's amount until the
+        # copy is made: a proposal that changes nothing is not a proposal.
+        current = await budget_for(db, budget.category_id, month)
+        if proposed == (budget.amount if current is None else current.amount):
+            continue
+        spent = await spent_in(
+            db, budget.category_id, previous, budget.currency, converter
+        )
+        await propose(
+            db,
+            review.id,
+            kind=SuggestionKind.set_budget,
+            month=month,
+            dedupe_key=set_budget_key(budget.category_id, month),
+            payload={
+                "category_id": str(budget.category_id),
+                "month": month.isoformat(),
+                "amount": str(proposed),
+                "currency": budget.currency.value,
+            },
+            rationale=_budget_rationale(
+                previous, spent, budget.amount, index, proposed
+            ),
         )

@@ -86,7 +86,7 @@ class ReviewTrigger(str, enum.Enum):
 # The triggers that come due on their own, once each per month. The others are
 # the user asking or an event that can happen any number of times in a month,
 # so only these are the ones a month can be missing.
-SCHEDULED_TRIGGERS = (ReviewTrigger.recurring_monthly,)
+SCHEDULED_TRIGGERS = (ReviewTrigger.recurring_monthly, ReviewTrigger.month_end)
 
 
 class ReviewStatus(str, enum.Enum):
@@ -107,6 +107,7 @@ class SuggestionKind(str, enum.Enum):
     """
 
     add_transaction = "add_transaction"
+    set_budget = "set_budget"
 
 
 class SuggestionStatus(str, enum.Enum):

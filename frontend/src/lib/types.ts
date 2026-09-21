@@ -13,7 +13,7 @@ export type SignConvention =
 export type RowStatus = 'new' | 'duplicate' | 'ignored' | 'needs_category';
 export type ReviewTrigger = 'recurring_monthly' | 'month_end' | 'manual';
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed';
-export type SuggestionKind = 'add_transaction';
+export type SuggestionKind = 'add_transaction' | 'set_budget';
 export type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
 export type IndexOrigin = 'api' | 'manual';
 
@@ -236,21 +236,42 @@ export interface AddTransactionPayload {
   recurring_expense_id: string;
 }
 
-export interface Suggestion {
+/** What a `set_budget` Suggestion would set. */
+export interface SetBudgetPayload {
+  category_id: string;
+  month: string;
+  amount: string;
+  currency: Currency;
+}
+
+interface ProposedChange {
   id: string;
   review_id: string;
-  kind: SuggestionKind;
   month: string;
-  payload: AddTransactionPayload;
   rationale: string;
   status: SuggestionStatus;
   rejection_reason: string | null;
-  /** What accepting it created, e.g. the Transaction. */
+  /** What accepting it created, e.g. the Transaction or the Budget. */
   result_id: string | null;
   expires_on: string;
   resolved_at: string | null;
   created_at: string;
 }
+
+/**
+ * A proposal waiting in the Inbox.
+ *
+ * The kind says which payload it carries, so a card that has checked the kind
+ * knows exactly which fields it can read.
+ */
+export type Suggestion =
+  | (ProposedChange & { kind: 'add_transaction'; payload: AddTransactionPayload })
+  | (ProposedChange & { kind: 'set_budget'; payload: SetBudgetPayload });
+
+/** The fields of a proposal the user changed before accepting it. */
+export type SuggestionEdits =
+  | Partial<AddTransactionPayload>
+  | Partial<SetBudgetPayload>;
 
 export interface Inbox {
   suggestions: Suggestion[];

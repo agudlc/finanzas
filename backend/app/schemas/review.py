@@ -54,6 +54,24 @@ class AddTransactionPayload(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class SetBudgetPayload(BaseModel):
+    """
+    What a `set_budget` Suggestion would set.
+
+    The month is the one the Budget is for, stored as its first day like every
+    other month in the app. Accepting sets that Category's Budget whether or
+    not the month's copy already made one, so "there is one already" is the
+    case this kind exists for, not an error.
+    """
+
+    category_id: uuid.UUID
+    month: Date
+    amount: Decimal = Field(gt=0)
+    currency: Currency
+
+    model_config = {"extra": "forbid"}
+
+
 class SuggestionResponse(BaseModel):
     """
     What is being proposed, and why — and, once resolved, what came of it.

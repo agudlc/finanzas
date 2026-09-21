@@ -46,7 +46,9 @@ function Bandeja() {
       <ErrorText error={inbox.error ?? run.error} />
 
       {working && (
-        <p className="tag">Estoy revisando tus gastos recurrentes…</p>
+        <p className="tag">
+          Estoy revisando tus gastos recurrentes y tus presupuestos…
+        </p>
       )}
 
       {months.length > 0 ? (

@@ -53,6 +53,22 @@ class DolarApiRateSource:
             ) from error
 
 
+class StoredRates:
+    """
+    A source that never answers, leaving only the Rate Snapshots already stored.
+
+    What code with no request around it converts through. A Review is arithmetic
+    over what the app already knows: reaching dolarapi.com in the middle of a
+    run would also store a snapshot, and that is a commit a failed run could not
+    take back.
+    """
+
+    async def fetch(self, rate_type: RateType) -> Decimal:
+        raise RateUnavailable(
+            f"a {rate_type.value} rate is not asked for outside a request"
+        )
+
+
 class RateProvider:
     """
     Answers "how many ARS per USD on this date?".

@@ -10,18 +10,29 @@ import {
   decimal,
   longDay,
   money,
+  monthName,
   typedAmount,
 } from '@/lib/format';
 import { useAcceptSuggestion, useRejectSuggestion } from '@/lib/queries';
-import type { Category, Currency, Suggestion } from '@/lib/types';
+import type {
+  Category,
+  Currency,
+  SetBudgetPayload,
+  Suggestion,
+  SuggestionEdits,
+} from '@/lib/types';
 
 /**
- * One proposal, said plainly: what it would record, why, and what to do about it.
+ * One proposal, said plainly: what it would change, why, and what to do about it.
  *
  * The user decides from this card alone, so it never hides behind "gasto
  * recurrente de marzo" — the amount, the day and the category are all here, and
  * so is the chance to change any of them before saying yes. Rejecting means "no
  * este mes", which is why the reason is optional: most months there isn't one.
+ *
+ * Each kind says what it is proposing and how it can be edited; everything
+ * around that — the rationale, the buttons, the two questions the card can ask
+ * — is the same whatever is being proposed.
  */
 export default function SuggestionCard({
   suggestion,
@@ -39,35 +50,46 @@ export default function SuggestionCard({
   const accept = useAcceptSuggestion();
   const rejection = useRejectSuggestion();
 
-  const { description, amount, currency, date, is_fixed } = suggestion.payload;
+  const { amount, currency } = suggestion.payload;
   const working = accept.isPending || rejection.isPending;
+  const said = describe(suggestion, category);
+
+  function onAccept(payload?: SuggestionEdits) {
+    accept.mutate({ id: suggestion.id, payload });
+  }
 
   return (
     <article className="flex flex-col gap-3 rounded-xl bg-paper-2 p-5">
       <header className="leader">
-        <span className="text-sm">{description}</span>
-        <Badge variant="outline">nuevo gasto</Badge>
+        <span className="text-sm">{said.title}</span>
+        <Badge variant="outline">{said.badge}</Badge>
         <span className="dots" />
         <span className="num text-sm">{money(amount, currency)}</span>
       </header>
 
-      <p className="tag">
-        {longDay(date)} · {category?.name ?? 'sin categoría'}
-        {is_fixed ? ' · fijo' : ''}
-      </p>
+      <p className="tag">{said.detail}</p>
 
       <p className="text-sm text-ink-mute">{suggestion.rationale}</p>
 
       <ErrorText error={accept.error ?? rejection.error} />
 
       {open === 'editing' ? (
-        <EditForm
-          suggestion={suggestion}
-          categories={categories}
-          pending={working}
-          onCancel={() => setOpen(null)}
-          onAccept={(payload) => accept.mutate({ id: suggestion.id, payload })}
-        />
+        suggestion.kind === 'set_budget' ? (
+          <BudgetForm
+            proposed={suggestion.payload}
+            pending={working}
+            onCancel={() => setOpen(null)}
+            onAccept={onAccept}
+          />
+        ) : (
+          <EditForm
+            suggestion={suggestion}
+            categories={categories}
+            pending={working}
+            onCancel={() => setOpen(null)}
+            onAccept={onAccept}
+          />
+        )
       ) : open === 'rejecting' ? (
         <RejectForm
           pending={working}
@@ -92,16 +114,85 @@ export default function SuggestionCard({
           >
             Editar
           </Button>
-          <Button
-            size="sm"
-            disabled={working}
-            onClick={() => accept.mutate({ id: suggestion.id })}
-          >
+          <Button size="sm" disabled={working} onClick={() => onAccept()}>
             {accept.isPending ? 'Guardando…' : 'Aceptar'}
           </Button>
         </div>
       )}
     </article>
+  );
+}
+
+/** What each kind of proposal calls itself, in one place. */
+function describe(
+  suggestion: Suggestion,
+  category?: Category,
+): { badge: string; title: string; detail: string } {
+  if (suggestion.kind === 'set_budget') {
+    return {
+      badge: 'presupuesto',
+      title: category?.name ?? 'Presupuesto',
+      detail: `Límite de ${monthName(suggestion.payload.month)}`,
+    };
+  }
+  const { description, date, is_fixed } = suggestion.payload;
+  return {
+    badge: 'nuevo gasto',
+    title: description,
+    detail: `${longDay(date)} · ${category?.name ?? 'sin categoría'}${
+      is_fixed ? ' · fijo' : ''
+    }`,
+  };
+}
+
+/**
+ * The proposed limit, editable.
+ *
+ * Only the amount: the Category and the month are what the proposal is *about*,
+ * and moving either of them would be setting a different Budget, which the
+ * Presupuestos screen already does.
+ */
+function BudgetForm({
+  proposed,
+  pending,
+  onCancel,
+  onAccept,
+}: {
+  proposed: SetBudgetPayload;
+  pending: boolean;
+  onCancel: () => void;
+  onAccept: (payload: Partial<SetBudgetPayload>) => void;
+}) {
+  const [amount, setAmount] = useState(typedAmount(proposed.amount));
+
+  return (
+    <form
+      className="flex flex-col gap-4 pt-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!amount) return;
+        onAccept({ amount: decimal(amount) });
+      }}
+    >
+      <Field label="Monto">
+        <Input
+          required
+          inputMode="decimal"
+          className="num"
+          value={amount}
+          onChange={(event) => setAmount(event.target.value)}
+        />
+      </Field>
+
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          Cancelar
+        </Button>
+        <Button type="submit" size="sm" disabled={pending}>
+          {pending ? 'Guardando…' : 'Guardar y aceptar'}
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -119,7 +210,7 @@ function EditForm({
   onCancel,
   onAccept,
 }: {
-  suggestion: Suggestion;
+  suggestion: Suggestion & { kind: 'add_transaction' };
   categories: Category[];
   pending: boolean;
   onCancel: () => void;

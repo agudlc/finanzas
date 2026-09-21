@@ -19,8 +19,13 @@ async def reviews(client) -> list[dict]:
     return response.json()
 
 
-async def scheduled(client) -> list[dict]:
-    return [one for one in await reviews(client) if one["trigger"] != "manual"]
+async def scheduled(client, trigger: str | None = None) -> list[dict]:
+    """The Reviews nobody asked for: all of them, or those of one trigger."""
+    return [
+        one
+        for one in await reviews(client)
+        if one["trigger"] != "manual" and trigger in (None, one["trigger"])
+    ]
 
 
 async def test_opening_the_inbox_runs_this_months_scheduled_review(client):
@@ -31,8 +36,7 @@ async def test_opening_the_inbox_runs_this_months_scheduled_review(client):
     assert [one["payload"]["description"] for one in proposed] == ["Alquiler"], (
         "nobody pressed Revisar ahora: the month's Review caught up on its own"
     )
-    [review] = await scheduled(client)
-    assert review["trigger"] == "recurring_monthly"
+    [review] = await scheduled(client, "recurring_monthly")
     assert review["status"] == "done"
 
 
@@ -42,7 +46,10 @@ async def test_opening_the_inbox_again_runs_nothing_more(client):
     await inbox(client)
     await inbox(client)
 
-    assert len(await scheduled(client)) == 1
+    assert sorted(one["trigger"] for one in await scheduled(client)) == [
+        "month_end",
+        "recurring_monthly",
+    ]
     assert len(await suggestions(client)) == 1
 
 
@@ -52,7 +59,9 @@ async def test_a_manual_review_does_not_replace_the_scheduled_one(client):
     await run_review(client)
 
     assert len(await suggestions(client)) == 1, "the proposal is not made twice"
-    assert len(await scheduled(client)) == 1, "the month's Review still happened"
+    assert len(await scheduled(client, "recurring_monthly")) == 1, (
+        "the month's Review still happened"
+    )
 
 
 async def test_each_month_gets_its_own_scheduled_review(client, clock):
@@ -62,7 +71,7 @@ async def test_each_month_gets_its_own_scheduled_review(client, clock):
     clock.date = clock.date.replace(month=4, day=2)
     proposed = await suggestions(client)
 
-    assert len(await scheduled(client)) == 2
+    assert len(await scheduled(client, "recurring_monthly")) == 2
     assert [one["payload"]["date"] for one in proposed] == ["2026-04-05"], (
         "March's proposal is gone and April's is waiting"
     )

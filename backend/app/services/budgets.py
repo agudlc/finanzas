@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clock import Clock
 from app.models import Budget, BudgetMonth, Transaction
-from app.models.enums import BudgetState, TransactionType
+from app.models.enums import BudgetState, Currency, TransactionType
 from app.months import days_in_month, month_of
 from app.schemas.budget import BudgetCreate, BudgetProgress, BudgetUpdate
 from app.services.categories import get_category
@@ -41,11 +41,7 @@ async def budgets_in(db: AsyncSession, month: Date) -> list[Budget]:
 
 
 async def create_budget(db: AsyncSession, data: BudgetCreate) -> Budget:
-    category = await get_category(db, data.category_id)
-    if category.type is not TransactionType.expense:
-        raise Invalid(
-            f"'{category.name}' is an income Category, which has no Budget"
-        )
+    category = await _expense_category(db, data.category_id)
     name = category.name  # read before the rollback below expires the row
     month = month_of(data.month)
     # Setting a Budget by hand starts the month too, so rollover never arrives
@@ -61,6 +57,64 @@ async def create_budget(db: AsyncSession, data: BudgetCreate) -> Budget:
         raise Conflict(f"'{name}' already has a Budget for that month") from error
     await db.refresh(budget)
     return budget
+
+
+async def set_budget(
+    db: AsyncSession, data: BudgetCreate, clock: Clock
+) -> Budget:
+    """
+    The Category's Budget for a month, whether or not it already has one.
+
+    What accepting a `set_budget` Suggestion does. It is `create_budget` and
+    `update_budget` in one, choosing between them the way the user would: the
+    month's copy is usually what it moves, and "that month already has one" is
+    the case this exists for rather than the conflict it is over there. It is
+    no shortcut past the rules, only past the extra request (ADR-0002).
+
+    A month nobody has opened yet is started first, because starting it with
+    this one Budget alone would leave every other Category's behind: the copy
+    is the base, and this only moves one of the amounts on it. The commit is
+    the caller's — here and in the copy — so the Suggestion, the month and the
+    Budget it set all land together.
+    """
+    await _expense_category(db, data.category_id)
+    month = month_of(data.month)
+    await start_month(db, month, clock)
+    # A month too far ahead to be started is still opened by the Budget being
+    # set in it, exactly as setting one by hand opens it.
+    await _mark_started(db, month)
+    budget = await budget_for(db, data.category_id, month)
+    if budget is None:
+        budget = Budget(**{**data.model_dump(), "month": month})
+        db.add(budget)
+    else:
+        budget.amount = data.amount
+        budget.currency = data.currency
+    # The id is the column default, which only exists once the row is flushed.
+    await db.flush()
+    return budget
+
+
+async def _expense_category(db: AsyncSession, category_id: uuid.UUID):
+    """The Category a Budget is allowed to be for."""
+    category = await get_category(db, category_id)
+    if category.type is not TransactionType.expense:
+        raise Invalid(
+            f"'{category.name}' is an income Category, which has no Budget"
+        )
+    return category
+
+
+async def budget_for(
+    db: AsyncSession, category_id: uuid.UUID, month: Date
+) -> Budget | None:
+    """That Category's Budget for that month, if it has one."""
+    result = await db.execute(
+        select(Budget)
+        .where(Budget.category_id == category_id)
+        .where(Budget.month == month_of(month))
+    )
+    return result.scalars().first()
 
 
 async def update_budget(
@@ -90,6 +144,13 @@ async def list_progress(
 async def roll_over_into(
     db: AsyncSession, month: Date, clock: Clock
 ) -> list[Budget]:
+    """The month, started if it had not been, and the Budgets it now has."""
+    await start_month(db, month, clock)
+    await db.commit()
+    return await budgets_in(db, month)
+
+
+async def start_month(db: AsyncSession, month: Date, clock: Clock) -> None:
     """
     Opening a month with no Budgets starts it from the last month that had any.
 
@@ -97,11 +158,14 @@ async def roll_over_into(
     user's own: emptying it is a decision, not an invitation to copy last
     month's in again. A month that has not begun yet is left alone, so next
     month's Budgets are not set before the user has seen how this one ended.
+
+    The commit is the caller's, so a month opened by accepting a Suggestion is
+    written in the same breath as the Suggestion that opened it.
     """
     if await db.get(BudgetMonth, month) is not None:
-        return await budgets_in(db, month)
+        return
     if month > month_of(clock.today()):
-        return await budgets_in(db, month)
+        return
 
     previous = (
         await db.execute(
@@ -122,8 +186,6 @@ async def roll_over_into(
             )
         )
     await _mark_started(db, month)
-    await db.commit()
-    return await budgets_in(db, month)
 
 
 async def _mark_started(db: AsyncSession, month: Date) -> None:
@@ -131,26 +193,33 @@ async def _mark_started(db: AsyncSession, month: Date) -> None:
         db.add(BudgetMonth(month=month))
 
 
-async def spent_against(
-    db: AsyncSession, budget: Budget, converter: MoneyConverter
+async def spent_in(
+    db: AsyncSession,
+    category_id: uuid.UUID,
+    month: Date,
+    currency: Currency,
+    converter: MoneyConverter,
 ) -> Decimal:
     """
-    What the Category cost that month, in the Budget's own currency.
+    What a Category cost in a month, in one currency.
 
     Refunds are Expenses with a negative amount, so they subtract themselves.
+    It takes the Category and the month rather than a Budget because a month
+    that has been spent is worth reading where no Budget was set for it too —
+    which is what the month-end Review does with the month that just ended.
     """
     statement = in_month(
         select(Transaction)
-        .where(Transaction.category_id == budget.category_id)
+        .where(Transaction.category_id == category_id)
         .where(Transaction.type == TransactionType.expense),
-        budget.month,
+        month_of(month),
     )
     total = Decimal(0)
     for transaction in (await db.execute(statement)).scalars():
         total += await converter.convert(
             transaction.amount,
             transaction.currency,
-            budget.currency,
+            currency,
             transaction.date,
             transaction.exchange_rate,
         )
@@ -182,7 +251,9 @@ def state_of(budget: Budget, spent: Decimal, pace: Decimal | None) -> BudgetStat
 async def progress_of(
     db: AsyncSession, budget: Budget, clock: Clock, converter: MoneyConverter
 ) -> BudgetProgress:
-    spent = await spent_against(db, budget, converter)
+    spent = await spent_in(
+        db, budget.category_id, budget.month, budget.currency, converter
+    )
     pace = pace_of(budget, clock.today())
     return BudgetProgress(
         id=budget.id,

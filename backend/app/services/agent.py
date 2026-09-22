@@ -44,7 +44,7 @@ from app.services.outside import Outside
 
 # Bumped whenever the system prompt changes, so a run can be read against the
 # words that produced it rather than against today's.
-PROMPT_VERSION = "2026-09-e"
+PROMPT_VERSION = "2026-09-f"
 
 # The brief is already complete and the tools only fill in around it, so a run
 # that has not finished in ten turns is looping rather than working.
@@ -107,6 +107,15 @@ How to decide what to say:
   for a description that keeps arriving and belongs in a Categorization Rule,
   and for a charge that looks like it comes every month. The rest of the month
   is context for those, not the subject.
+- When the brief says a month has ended, that is what the run is about: what
+  the new month's Budgets should be, proposed with `propose_set_budget`, one
+  per Category worth moving. Weigh three things together — what the Budget was
+  and what was actually spent against it, the latest published Inflation
+  Index, and what the Category has been costing month by month — and say all
+  of them in the rationale: a Budget the user is asked to raise has to come
+  with the reason it fell behind. One that already fits what the Category
+  costs is left where it is. Propose in the currency the Budget is in, and
+  leave a Budget in dollars alone: the Argentine index says nothing about it.
 - Point at the numbers in the brief. "Gastaste 120.000 en Delivery, 40% más que
   el límite" is worth saying; "cuidado con los gastos" is not.
 - Do not repeat an observation already recorded in the last two months, and do
@@ -180,7 +189,7 @@ async def review_with_agent(
     review.input_tokens = 0
     review.output_tokens = 0
     messages: list[dict] = [
-        {"role": "user", "content": await brief(db, review, outside.clock)}
+        {"role": "user", "content": await brief(db, review, outside)}
     ]
     # Settled before the first turn and kept for the whole run: what the tools
     # may read cannot move under the model halfway through a conversation.

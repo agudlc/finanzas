@@ -465,11 +465,17 @@ class Review(Base):
     # at the same moment, and only one of them gets to create it. Only the
     # scheduled triggers are covered — the user can ask as often as they like,
     # and an event can happen as often as it happens.
+    #
+    # `used_agent` is in the key because a month-end Review that called the
+    # model and the arithmetic stand-in for one that could not are two rows of
+    # the same trigger and month. Once each, still: the month cannot end up
+    # with two agent Reviews proposing against two arithmetic ones.
     __table_args__ = (
         Index(
             "uq_scheduled_review_per_month",
             "trigger",
             "month",
+            "used_agent",
             unique=True,
             postgresql_where=text(
                 "trigger IN ("
@@ -487,7 +493,10 @@ class Review(Base):
         Enum(ReviewStatus), default=ReviewStatus.queued
     )
     # Whether the run called the model. Deterministic and agent work never
-    # share a Review, so the trigger alone answers this.
+    # share a Review, so this is settled when the row is written and never
+    # while it runs. It is what a finished Review is read by, because a
+    # trigger the agent normally serves can also be the arithmetic standing
+    # in for it.
     used_agent: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(String(250), nullable=True)

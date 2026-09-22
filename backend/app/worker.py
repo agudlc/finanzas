@@ -22,8 +22,14 @@ from app.services.reviews import ensure_scheduled_reviews, run_review
 
 
 async def run_review_job(ctx: dict, review_id: str) -> None:
+    """
+    One Review, run. The queue comes with it so a failed agent Review can ask
+    for its arithmetic stand-in the same way everything else is asked for.
+    """
     async with get_sessionmaker()() as session:
-        await run_review(session, uuid.UUID(review_id), Clock())
+        await run_review(
+            session, uuid.UUID(review_id), Clock(), queue=ArqReviewQueue()
+        )
 
 
 async def scheduled_reviews_job(ctx: dict) -> None:

@@ -251,8 +251,9 @@ class EagerReviewQueue:
     The worker, run in-process: no Redis, and the Review is done on return.
 
     It runs exactly what the ARQ job runs, so the only thing tests give up by
-    using it is having to wait. `hold` stands in for a worker that is down, and
-    `break_with` for a producer that raises.
+    using it is having to wait — including being handed to the run, so a Review
+    a failed one asks for is run here too. `hold` stands in for a worker that
+    is down, and `break_with` for a producer that raises.
 
     A Review handed over with a delay is held instead of run, the way a
     deferred ARQ job waits in Redis: `release` is the test saying those minutes
@@ -276,10 +277,16 @@ class EagerReviewQueue:
         self._held = True
 
     def break_with(self, message: str) -> None:
+        """Every Review raises, the stand-in for a failed one included."""
+
         async def explode(db, review, outside):
             raise RuntimeError(message)
 
-        self._producers = {trigger: [explode] for trigger in ReviewTrigger}
+        self._producers = {
+            (trigger, used_agent): [explode]
+            for trigger in ReviewTrigger
+            for used_agent in (False, True)
+        }
 
     async def enqueue(self, review_id, delay: timedelta | None = None) -> None:
         if self._held:
@@ -314,6 +321,7 @@ class EagerReviewQueue:
                 self._index_source,
                 self._llm,
                 self._sleep,
+                queue=self,
             )
 
 

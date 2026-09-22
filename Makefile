@@ -2,14 +2,16 @@
 
 DEV_DATABASE_URL  ?= postgresql+asyncpg://agudlc:finagudlc@localhost:5432/finagudlc
 TEST_DATABASE_URL ?= postgresql+asyncpg://agudlc:finagudlc@localhost:5432/finanzas_test
+EVAL_DATABASE_URL ?= postgresql+asyncpg://agudlc:finagudlc@localhost:5432/finanzas_eval
 VENV              := backend/.venv
 PYTHON            := $(VENV)/bin/python
 
-.PHONY: help dev down install db test migrate migration
+.PHONY: help dev down install db test eval migrate migration
 
 help:
 	@echo "make dev        start the database, the backend and the frontend"
 	@echo "make test       run the API test suite against a disposable database"
+	@echo "make eval       ask the real model about one fixed month, and print what it says"
 	@echo "make migrate    apply migrations to the development database"
 	@echo "make migration  create a migration (make migration m=\"what changed\")"
 	@echo "make down       stop everything"
@@ -30,6 +32,12 @@ db:
 
 test: $(VENV) db
 	cd backend && TEST_DATABASE_URL=$(TEST_DATABASE_URL) ../$(PYTHON) -m pytest
+
+# The agent, asked about one fixed month by the real Claude: four Reviews,
+# one per trigger, on a database of its own. It costs tokens and it says
+# something a little different every time, which is why it is not `make test`.
+eval: $(VENV) db
+	cd backend && EVAL_DATABASE_URL=$(EVAL_DATABASE_URL) ../$(PYTHON) -m evals
 
 migrate: $(VENV) db
 	cd backend && DATABASE_URL=$(DEV_DATABASE_URL) ../$(PYTHON) -m alembic upgrade head

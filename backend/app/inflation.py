@@ -36,6 +36,11 @@ IPC = "IPC"
 # whose newest month ended more than this long ago has stopped being kept up.
 STALE_AFTER = timedelta(days=45)
 
+# How far back "the newest month that is out" looks. The IPC of month M comes
+# out in the middle of M+1, so on the 1st the newest is usually two months old;
+# a year of slack covers a series that fell behind.
+PUBLISHED_WITHIN_MONTHS = 12
+
 # One point of a published series: a month, as its first day, and how much
 # prices moved that month in percentage points (1.659 means 1.659%).
 IndexPoint = tuple[Date, Decimal]
@@ -123,6 +128,22 @@ class IndexProvider:
             await self._refresh(name)
             stored = await self._stored_in(name, start, end)
         return stored
+
+    async def latest_published(
+        self, month: Date, name: str = IPC
+    ) -> InflationIndex | None:
+        """
+        The newest month of the series that is out by the time `month` starts.
+
+        What the month-end Review moves Budgets by, and what its brief says it
+        is moving them by — one answer, read in one place, so the agent and the
+        arithmetic can never be working off different inflation.
+        """
+        last = add_months(month_of(month), -1)
+        values = await self.values_in(
+            add_months(last, -PUBLISHED_WITHIN_MONTHS), last, name
+        )
+        return values[-1] if values else None
 
     async def set_manual(
         self, month: Date, value: Decimal, name: str = IPC

@@ -12,6 +12,13 @@ Some Reviews nobody asks for: they are due once a month and the worker's cron
 starts them. The 1st is when they should happen, not the only moment they can,
 so opening the Inbox catches up on any the worker missed.
 
+One of them is the agent's, and it has a stand-in. The month-end Review asks
+the model what next month's Budgets should be, and the user is owed those
+proposals whether or not there is a model to ask: one that ends failed — a
+missing key, an API that never answered — asks for a second Review of the same
+trigger that does the arithmetic instead. Only one of the two ever proposes,
+because the stand-in is created by the failure and by nothing else.
+
 Others an event asks for, and one of those waits before it starts. Confirming
 an Import is the user saying "look at what I just loaded", and loading three
 files in a row is one such moment rather than three: the Review is deferred a
@@ -56,21 +63,30 @@ from app.services.producers import (
 # because reading it is what a producer cannot do on its own.
 Producer = Callable[[AsyncSession, Review, Outside], Awaitable[None]]
 
-# What each trigger runs. A manual Review runs everything the user could be
-# waiting for, and the dedupe keys keep that from stepping on the scheduled runs.
-# The agent has a trigger of its own rather than a producer alongside the
-# arithmetic: a Review either called the model or it did not (ADR-0003).
-PRODUCERS: dict[ReviewTrigger, list[Producer]] = {
-    ReviewTrigger.recurring_monthly: [propose_recurring_expenses],
-    ReviewTrigger.month_end: [propose_budget_adjustments],
-    ReviewTrigger.manual: [
+# What a Review runs, by what it is: its trigger and whether it is the agent's.
+# A manual Review runs everything the user could be waiting for, and the dedupe
+# keys keep that from stepping on the scheduled runs. Agent work and arithmetic
+# never share a Review (ADR-0003), which is why `used_agent` is half the key
+# rather than something a run decides as it goes: the month-end trigger is the
+# agent's, and the same trigger without it is the arithmetic standing in.
+PRODUCERS: dict[tuple[ReviewTrigger, bool], list[Producer]] = {
+    (ReviewTrigger.recurring_monthly, False): [propose_recurring_expenses],
+    (ReviewTrigger.month_end, True): [review_with_agent],
+    (ReviewTrigger.month_end, False): [propose_budget_adjustments],
+    (ReviewTrigger.manual, False): [
         propose_recurring_expenses,
         propose_budget_adjustments,
     ],
-    ReviewTrigger.manual_agent: [review_with_agent],
-    ReviewTrigger.import_finished: [review_with_agent],
-    ReviewTrigger.budget_exceeded: [review_with_agent],
+    (ReviewTrigger.manual_agent, True): [review_with_agent],
+    (ReviewTrigger.import_finished, True): [review_with_agent],
+    (ReviewTrigger.budget_exceeded, True): [review_with_agent],
 }
+
+# The agent Reviews the user is owed something from either way, so a failed run
+# asks for a deterministic one of the same trigger. Only these: an Import the
+# agent never read has nothing an arithmetic run could say about it, but a month
+# whose Budgets nobody moved is a month falling behind prices.
+STOOD_IN_FOR = (ReviewTrigger.month_end,)
 
 WAITING = (ReviewStatus.queued, ReviewStatus.running)
 
@@ -95,7 +111,10 @@ async def get_review(db: AsyncSession, review_id: uuid.UUID) -> Review:
 
 
 async def build_review(
-    db: AsyncSession, trigger: ReviewTrigger, month: Date
+    db: AsyncSession,
+    trigger: ReviewTrigger,
+    month: Date,
+    used_agent: bool | None = None,
 ) -> Review:
     """
     The Review, added to the session but not committed.
@@ -104,11 +123,16 @@ async def build_review(
     crossing its limit takes the link to the Review and the Review itself in
     one transaction, so a Budget can never be marked as asked about a Review
     nobody has.
+
+    The trigger says whether the model is called, unless the caller says
+    otherwise — which only the stand-in for a failed agent Review does.
     """
     review = Review(
         trigger=trigger,
         month=month_of(month),
-        used_agent=trigger in AGENT_TRIGGERS,
+        used_agent=(
+            trigger in AGENT_TRIGGERS if used_agent is None else used_agent
+        ),
     )
     db.add(review)
     # The id is the column default, which only exists once the row is flushed.
@@ -117,9 +141,12 @@ async def build_review(
 
 
 async def create_review(
-    db: AsyncSession, trigger: ReviewTrigger, month: Date
+    db: AsyncSession,
+    trigger: ReviewTrigger,
+    month: Date,
+    used_agent: bool | None = None,
 ) -> Review:
-    review = await build_review(db, trigger, month)
+    review = await build_review(db, trigger, month, used_agent)
     await db.commit()
     await db.refresh(review)
     return review
@@ -160,11 +187,14 @@ async def _scheduled_triggers_in(
 
 
 async def _create_scheduled(
-    db: AsyncSession, trigger: ReviewTrigger, month: Date
+    db: AsyncSession,
+    trigger: ReviewTrigger,
+    month: Date,
+    used_agent: bool | None = None,
 ) -> Review | None:
     """The Review, or None when someone else got there first."""
     try:
-        return await create_review(db, trigger, month)
+        return await create_review(db, trigger, month, used_agent)
     except IntegrityError:
         # The unique index caught a cron and an Inbox read deciding at the same
         # moment that this month was missing its Review.
@@ -259,12 +289,22 @@ async def run_review(
     db: AsyncSession,
     review_id: uuid.UUID,
     clock: Clock,
-    producers: dict[ReviewTrigger, list[Producer]] | None = None,
+    producers: dict[tuple[ReviewTrigger, bool], list[Producer]] | None = None,
     index_source: IndexSource | None = None,
     llm: LLMClient | None = None,
     sleep: Sleep = asyncio.sleep,
+    *,
+    queue: ReviewQueue,
 ) -> Review:
-    """Run what the Review's trigger asks for, and record how it went."""
+    """
+    Run what the Review asks for, and record how it went.
+
+    The queue is here for what happens after a failure: a Review the agent did
+    not get through asks for its stand-in, and handing that over the way every
+    other Review is handed over keeps the row the source of truth. It has no
+    default on purpose — a caller that forgot it would leave a failed month-end
+    Review standing alone, which is the one thing this is all for.
+    """
     review = await get_review(db, review_id)
     if not await _claim(db, review, clock):
         return review
@@ -277,14 +317,38 @@ async def run_review(
         sleep=sleep,
     )
     try:
-        for produce in producers[review.trigger]:
+        for produce in producers[(review.trigger, review.used_agent)]:
             await produce(db, review, outside)
         await db.commit()
     except Exception as error:
         # Nothing half-proposed survives a failed run.
         await db.rollback()
-        return await _finish(db, review_id, ReviewStatus.failed, error=str(error))
+        failed = await _finish(
+            db, review_id, ReviewStatus.failed, error=str(error)
+        )
+        await _stand_in_for(db, failed, queue)
+        return failed
     return await _finish(db, review_id, ReviewStatus.done)
+
+
+async def _stand_in_for(
+    db: AsyncSession, failed: Review, queue: ReviewQueue
+) -> None:
+    """
+    Ask for the arithmetic, now that the agent's Review has not delivered.
+
+    Only for an agent Review of a trigger that has a stand-in, so nothing here
+    can loop: the Review this creates is deterministic, and a deterministic one
+    stands in for nobody. The user ends up with one set of Budget proposals or
+    the other and never both, because a failed Review proposed nothing at all.
+    """
+    if not failed.used_agent or failed.trigger not in STOOD_IN_FOR:
+        return
+    review = await _create_scheduled(
+        db, failed.trigger, failed.month, used_agent=False
+    )
+    if review is not None:
+        await queue.enqueue(review.id)
 
 
 async def _claim(db: AsyncSession, review: Review, clock: Clock) -> bool:

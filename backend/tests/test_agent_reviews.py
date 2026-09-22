@@ -41,7 +41,7 @@ async def test_revisar_ahora_asks_for_the_arithmetic_and_the_agent(client):
 
     assert [one["trigger"] for one in asked] == ["manual", "manual_agent"]
     assert [one["used_agent"] for one in asked] == [False, True], (
-        "the trigger alone says whether a Review called the model (ADR-0003)"
+        "a Review either called the model or it did not (ADR-0003)"
     )
 
 
@@ -184,7 +184,7 @@ async def test_a_model_that_never_stops_is_cut_off_and_says_so(client, llm):
 
     assert review["status"] == "done", "what it recorded before the cap stands"
     assert review["note"] == "hit the iteration cap"
-    assert len(await insights(client)) == 10
+    assert len(review["insights"]) == 10, "one per turn, and then the cap"
 
 
 async def test_a_tool_that_does_not_exist_is_answered_rather_than_fatal(client, llm):

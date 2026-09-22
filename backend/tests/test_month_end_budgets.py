@@ -1,17 +1,30 @@
 """
-The Review that keeps Budgets up with prices.
+The arithmetic that keeps Budgets up with prices, when the agent cannot.
 
-A new month still starts from a copy of the last one's Budgets; on the 1st the
-`month_end` Review proposes moving each of those copies by the latest published
-IPC. TODAY is the 15th of March 2026 and the fake series ends in February, so
-"last month" is February and "the latest published IPC" is February's 1,659%.
+The `month_end` Review is the agent's, and this is what stands in for it: a
+deterministic Review of the same trigger that moves each of last month's
+Budgets by the latest published IPC. So every test here starts from an
+installation with no API key, the plainest way the agent's Review fails.
+
+A new month still starts from a copy of the last one's Budgets, and what is
+proposed is a move of that copy. TODAY is the 15th of March 2026 and the fake
+series ends in February, so "last month" is February and "the latest published
+IPC" is February's 1,659%.
 """
+
+import pytest
 
 from tests.api import create_transaction, default_category
 from tests.test_budgets import budgets_for, create_budget
 from tests.test_reviews import inbox, run_review, suggestions
 from tests.test_scheduled_reviews import scheduled
 from tests.test_suggestions import accept
+
+
+@pytest.fixture(autouse=True)
+def no_key(llm):
+    """No model to ask, so every month-end Review here falls back."""
+    llm.without_key()
 
 
 async def budget_suggestions(client) -> list[dict]:
@@ -87,9 +100,11 @@ async def test_an_ipc_nobody_published_proposes_nothing(client, index_source):
     await last_month(client, supermercado)
 
     assert await budget_suggestions(client) == []
-    assert all(one["status"] == "done" for one in await scheduled(client)), (
-        "an index nobody published is not a failure"
-    )
+    assert all(
+        one["status"] == "done"
+        for one in await scheduled(client)
+        if not one["used_agent"]
+    ), "an index nobody published is not a failure"
 
 
 async def test_the_rationale_shows_the_month_against_its_budget(client):
@@ -176,9 +191,18 @@ async def test_the_month_end_review_runs_without_anybody_asking(client):
 
     await inbox(client)
 
-    triggers = [one["trigger"] for one in await scheduled(client)]
-    assert sorted(triggers) == ["month_end", "recurring_monthly"]
-    assert all(one["status"] == "done" for one in await scheduled(client))
+    triggers = sorted(one["trigger"] for one in await scheduled(client))
+    assert triggers == ["month_end", "month_end", "recurring_monthly"], (
+        "the agent's, and the arithmetic that stood in for it"
+    )
+    assert {
+        (one["trigger"], one["used_agent"]): one["status"]
+        for one in await scheduled(client)
+    } == {
+        ("recurring_monthly", False): "done",
+        ("month_end", True): "failed",
+        ("month_end", False): "done",
+    }
 
 
 async def test_opening_the_inbox_again_proposes_nothing_twice(client):
@@ -189,7 +213,9 @@ async def test_opening_the_inbox_again_proposes_nothing_twice(client):
     await inbox(client)
 
     assert len(await budget_suggestions(client)) == 1
-    assert len(await scheduled(client, "month_end")) == 1
+    assert len(await scheduled(client, "month_end")) == 2, (
+        "the failed agent Review and its stand-in, and neither of them twice"
+    )
 
 
 async def test_a_manual_review_proposes_the_months_budgets_too(client):

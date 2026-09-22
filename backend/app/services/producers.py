@@ -13,7 +13,7 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.inflation import IPC, IndexProvider
+from app.inflation import IndexProvider
 from app.models import AdjustmentRule, InflationIndex, RecurringExpense, Review
 from app.models.enums import AdjustmentKind, Currency, SuggestionKind
 from app.months import add_months, days_in_month
@@ -31,11 +31,6 @@ from app.services.recurring_expenses import (
     list_recurring_expenses,
 )
 from app.services.suggestions import propose
-
-# How far back the month-end Review looks for the newest published index. The
-# IPC of month M comes out in the middle of M+1, so on the 1st the newest is
-# usually two months old; a year of slack covers a series that fell behind.
-LOOKBACK_MONTHS = 12
 
 MONTH_NAMES = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -176,15 +171,6 @@ async def propose_recurring_expenses(
         )
 
 
-async def _latest_published(
-    indexes: IndexProvider, month: Date
-) -> InflationIndex | None:
-    """The newest month of the IPC that is out by the time `month` starts."""
-    last = add_months(month, -1)
-    values = await indexes.values_in(add_months(last, -LOOKBACK_MONTHS), last, IPC)
-    return values[-1] if values else None
-
-
 def _budget_rationale(
     previous: Date,
     spent: Decimal,
@@ -207,6 +193,13 @@ async def propose_budget_adjustments(
     """
     One `set_budget` per ARS Budget of last month, moved by the latest IPC.
 
+    This is what "Revisar ahora" proposes, and what the month-end Review
+    falls back on when the agent could not: the same shape of change, worked
+    out from the one figure arithmetic can read. A blunter answer than the
+    agent's — every Budget moved by the same percentage, whatever the
+    Category has actually been costing — and the right one to be left
+    holding, because the alternative is a month whose limits nobody moved.
+
     Last month's is the right base because the new month starts as a copy of
     it: what this proposes is a move of that copy, whether or not it has been
     made yet. So nothing here writes a Budget — accepting does.
@@ -223,7 +216,7 @@ async def propose_budget_adjustments(
     ]
     if not budgets:
         return
-    index = await _latest_published(outside.indexes, month)
+    index = await outside.indexes.latest_published(month)
     if index is None:
         return
 

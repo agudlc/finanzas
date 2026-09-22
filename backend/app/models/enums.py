@@ -108,10 +108,14 @@ SCHEDULED_TRIGGERS = (ReviewTrigger.recurring_monthly, ReviewTrigger.month_end)
 MANUAL_TRIGGERS = (ReviewTrigger.manual, ReviewTrigger.manual_agent)
 
 # The triggers whose Reviews call the model. Deterministic and agent work never
-# share a Review (ADR-0003), so the trigger alone says whether one used the
-# agent, and nothing has to be set while the run is going.
+# share a Review (ADR-0003), so nothing has to be set while the run is going:
+# the trigger says what the Review is created as. It does not always say what
+# it ended up being: a month-end Review the agent could not run is stood in for
+# by a second one of the same trigger with the arithmetic instead, so
+# `used_agent` is what a finished Review is read by.
 AGENT_TRIGGERS = (
     ReviewTrigger.manual_agent,
+    ReviewTrigger.month_end,
     ReviewTrigger.import_finished,
     ReviewTrigger.budget_exceeded,
 )
